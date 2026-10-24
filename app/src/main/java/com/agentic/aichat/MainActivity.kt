@@ -21,15 +21,14 @@ import com.agentic.aichat.ui.nav.ChatHome
 import com.agentic.aichat.ui.nav.Favorites
 import com.agentic.aichat.ui.nav.Profile
 import com.agentic.aichat.ui.nav.rememberAppBackStack
-import com.agentic.aichat.review.ReviewHelper
 import com.agentic.aichat.ui.theme.AIChatTheme
 
 class MainActivity : ComponentActivity() {
 	override fun onCreate(savedInstanceState: Bundle?) {
 		super.onCreate(savedInstanceState)
 		enableEdgeToEdge()
-		ReviewHelper.recordLaunch(this)
-		ReviewHelper.maybeRequestInAppReview(applicationContext, this)
+//		ReviewHelper.recordLaunch(this)
+//		ReviewHelper.maybeRequestInAppReview(applicationContext, this)
 		setContent {
 			AIChatTheme {
 				AIChatApp()
