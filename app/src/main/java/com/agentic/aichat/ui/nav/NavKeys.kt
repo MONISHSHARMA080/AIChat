@@ -4,10 +4,16 @@ import androidx.navigation3.runtime.NavKey
 import kotlinx.serialization.Serializable
 
 @Serializable
+data object Onboarding : NavKey
+
+@Serializable
+data object SignIn : NavKey
+
+@Serializable
 data object ChatHome : NavKey
 
 @Serializable
-data object Favorites : NavKey
+data object Settings : NavKey
 
 @Serializable
-data object Profile : NavKey
+data object Paywall : NavKey

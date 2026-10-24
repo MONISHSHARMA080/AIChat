@@ -4,31 +4,27 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
+import androidx.compose.material3.adaptive.navigationsuite.rememberNavigationSuiteScaffoldState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.tooling.preview.PreviewScreenSizes
 import androidx.navigation3.runtime.NavKey
 import com.agentic.aichat.ui.nav.AppNavDisplay
 import com.agentic.aichat.ui.nav.ChatHome
-import com.agentic.aichat.ui.nav.Favorites
-import com.agentic.aichat.ui.nav.Profile
+import com.agentic.aichat.ui.nav.Settings
 import com.agentic.aichat.ui.nav.rememberAppBackStack
 import com.agentic.aichat.ui.theme.AIChatTheme
+import dagger.hilt.android.AndroidEntryPoint
 
+@AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 	override fun onCreate(savedInstanceState: Bundle?) {
 		super.onCreate(savedInstanceState)
 		enableEdgeToEdge()
-//		ReviewHelper.recordLaunch(this)
-//		ReviewHelper.maybeRequestInAppReview(applicationContext, this)
 		setContent {
 			AIChatTheme {
 				AIChatApp()
@@ -37,19 +33,21 @@ class MainActivity : ComponentActivity() {
 	}
 }
 
-@PreviewScreenSizes
 @Composable
 fun AIChatApp() {
 	val backStack = rememberAppBackStack()
 
-	val currentDestination = when (backStack.lastOrNull()) {
-		ChatHome -> AppDestinations.HOME
-		Favorites -> AppDestinations.FAVORITES
-		Profile -> AppDestinations.PROFILE
-		else -> AppDestinations.HOME
+	// Hide the navigation suite on full-screen destinations (Onboarding, Sign-in, Paywall).
+	// See Step 2.1 "Control navigation area visibility" of the adaptive guidance.
+	val suiteState = rememberNavigationSuiteScaffoldState()
+	val currentDestination = AppDestinations.entries.firstOrNull { it.key == backStack.lastOrNull() }
+	val isNavAreaVisible = currentDestination != null
+	LaunchedEffect(isNavAreaVisible) {
+		if (isNavAreaVisible) suiteState.show() else suiteState.hide()
 	}
 
 	NavigationSuiteScaffold(
+		state = suiteState,
 		navigationSuiteItems = {
 			AppDestinations.entries.forEach { destination ->
 				item(
@@ -69,55 +67,20 @@ fun AIChatApp() {
 					}
 				)
 			}
-		}
+		},
 	) {
-		Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-			AppNavDisplay(
-				backStack = backStack,
-				modifier = Modifier.padding(innerPadding)
-			)
-		}
+		AppNavDisplay(
+			backStack = backStack,
+			modifier = Modifier,
+		)
 	}
 }
 
-enum class AppDestinations(
-		val label: String,
-		val icon: Int,
-		val key: NavKey,
+internal enum class AppDestinations(
+	val label: String,
+	val icon: Int,
+	val key: NavKey,
 ) {
-	HOME("Home", R.drawable.ic_home, ChatHome),
-	FAVORITES("Favorites", R.drawable.ic_favorite, Favorites),
-	PROFILE("Profile", R.drawable.ic_account_box, Profile),
-}
-
-@Composable
-fun ChatScreen(modifier: Modifier = Modifier) {
-	Text(
-		text = "Hello Android!",
-		modifier = modifier
-	)
-}
-
-@Composable
-fun FavoritesScreen(modifier: Modifier = Modifier) {
-	Text(
-		text = "Favorites",
-		modifier = modifier
-	)
-}
-
-@Composable
-fun ProfileScreen(modifier: Modifier = Modifier) {
-	Text(
-		text = "Profile",
-		modifier = modifier
-	)
-}
-
-@Preview(showBackground = true)
-@Composable
-fun ChatScreenPreview() {
-	AIChatTheme {
-		ChatScreen()
-	}
+	CHAT("Chats", R.drawable.ic_home, ChatHome),
+	SETTINGS("Settings", R.drawable.ic_settings, Settings),
 }

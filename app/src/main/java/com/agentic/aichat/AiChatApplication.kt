@@ -6,7 +6,9 @@ import com.agentic.aichat.billing.RevenueCatConfig
 import com.revenuecat.purchases.LogLevel
 import com.revenuecat.purchases.Purchases
 import com.revenuecat.purchases.PurchasesConfiguration
+import dagger.hilt.android.HiltAndroidApp
 
+@HiltAndroidApp
 class AiChatApplication : Application() {
 	override fun onCreate() {
 		super.onCreate()
