@@ -25,9 +25,10 @@ private fun NavBackStack<NavKey>.popSafely() {
 
 @Composable
 fun AppNavDisplay(
-	backStack: NavBackStack<NavKey>,
 	modifier: Modifier = Modifier,
 ) {
+	val backStack = rememberAppBackStack()
+
 	NavDisplay(
 		modifier = modifier,
 		backStack = backStack,
@@ -53,7 +54,6 @@ fun AppNavDisplay(
 			entry<ChatHome> {
 				ChatScreen(
 					onOpenSettings = { backStack.add(Settings) },
-					onOpenPaywall = { backStack.add(Paywall) },
 				)
 			}
 			entry<Settings> {
