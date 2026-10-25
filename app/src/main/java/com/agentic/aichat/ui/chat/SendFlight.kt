@@ -1,13 +1,7 @@
 package com.agentic.aichat.ui.chat
 
-// Everything about the "send flight": the data describing one flight and the
-// ghost bubble that detaches from the composer, flies up and lands in the list.
-
-
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -37,7 +31,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
 import kotlin.math.PI
-import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.sin
 import kotlinx.coroutines.coroutineScope
@@ -46,12 +39,32 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
+/**
+ * Tuning knobs. The vertical spring is also used for the list's item placement
+ * (see ChatScreen), so older messages slide up in step with the flying bubble.
+ *
+ * Feels too bouncy -> raise DAMPING toward 0.9.   Too slow -> raise both stiffness values.
+ */
+internal object FlightMotion {
+	const val DAMPING = 0.74f
+	const val STIFFNESS = 380f
+
+	/** Horizontal slide: critically damped and softer, so it trails the rise slightly. */
+	const val X_DAMPING = 1f
+	const val X_STIFFNESS = 240f
+}
+
 internal fun lerpF(a: Float, b: Float, t: Float): Float = a + (b - a) * t
+
+private fun smoothstep(edge0: Float, edge1: Float, x: Float): Float {
+	val t = ((x - edge0) / (edge1 - edge0)).coerceIn(0f, 1f)
+	return t * t * (3f - 2f * t)
+}
 
 /**
  * Unclipped bounds in root coordinates. boundsInRoot() clips against ancestors,
- * which gives the wrong rect for a list row that is partly off-screen or
- * behind the composer, exactly where a freshly sent bubble first appears.
+ * which gives the wrong rect for a list row that is partly off-screen or behind
+ * the composer, which is exactly where a freshly sent bubble first appears.
  */
 internal fun LayoutCoordinates.rectInRoot(): Rect {
 	val p = positionInRoot()
@@ -70,35 +83,24 @@ internal data class SendFlight(
 		val withImage: Boolean,
 		/** Where the ghost starts, in root coordinates. */
 		val origin: Rect,
+		/** The widest a sent bubble can be in the list, so the ghost wraps text identically. */
+		val maxWidthPx: Float,
 )
 
 /**
  * The bubble that flies from the composer to the message list.
  *
- * What makes it feel like iMessage:
- *  1. It appears on the SAME frame the draft clears, exactly over the typed
- *     text, so the text never blinks out. It sizes itself (same max width and
- *     padding as the real bubble), so it does not have to wait for the list.
- *  2. At the start the bubble is the composer's own colour, so you only see
- *     the text lift; the blue bubble then fades in around it.
- *  3. x and y use different springs: x is critically damped, y is softer with
- *     overshoot. The path curves and the bubble settles into its slot.
- *  4. Squash & stretch from the real y-velocity: it elongates while moving
- *     fast and relaxes as it settles. A small "pop" scale adds weight.
- *  5. A lift shadow peaks mid-air and is flat on landing.
- *  6. The tail corner forms late in the flight, like the real thing.
- *  7. The target is read live every frame, so it follows the real bubble while
- *     older rows glide up, the keyboard moves, or the list is still settling.
- *  8. Hand-off to the real bubble happens only once the target has stopped
- *     moving, in the same recomposition that removes the ghost.
- *
- * All motion is a graphicsLayer transform, so it never triggers layout and
- * the text never reflows.
+ * - Laid out once at the bubble's final size (same max width as the list row), so
+ *   text never reflows. All motion is a graphicsLayer transform.
+ * - It is visible from the very first frame, parked over the typed text, so there
+ *   is no gap between the composer clearing and the bubble appearing. The flight
+ *   starts as soon as the real bubble reports where it will land.
+ * - Position = lerp(origin, liveTarget, progress). The target is read every frame,
+ *   so the ghost follows the real bubble even while the list is still moving.
  */
 @Composable
 internal fun SendFlightGhost(
 		flight: SendFlight,
-		maxBubbleWidthPx: Float,
 		liveTarget: () -> Rect?,
 		containerOrigin: () -> Offset,
 		onLanded: () -> Unit,
@@ -109,13 +111,10 @@ internal fun SendFlightGhost(
 
 	val travelX = remember { Animatable(0f) }
 	val travelY = remember { Animatable(0f) }
-	val morph = remember { Animatable(0f) }
-	val tail = remember { Animatable(0f) }
 
 	LaunchedEffect(flight.id) {
-		// The ghost is already on screen (holding at the origin). Wait for the
-		// real bubble to report where it will land, then go.
-		val first = withTimeoutOrNull(500) {
+		// Wait (normally one or two frames) for the real bubble to report its slot.
+		val first = withTimeoutOrNull(300) {
 			snapshotFlow { liveTarget() }.filterNotNull().first()
 		}
 		if (first == null) {
@@ -125,20 +124,22 @@ internal fun SendFlightGhost(
 		}
 
 		coroutineScope {
-			// Colour / corner morph: starts a hair after lift-off.
-			launch { morph.animateTo(1f, tween(340, delayMillis = 30, easing = FastOutSlowInEasing)) }
-			// The tail forms in the last third of the flight.
-			launch { tail.animateTo(1f, tween(200, delayMillis = 190, easing = FastOutSlowInEasing)) }
 			launch {
-				travelX.animateTo(1f, spring(dampingRatio = 1f, stiffness = 380f))
+				travelY.animateTo(
+					1f,
+					spring(dampingRatio = FlightMotion.DAMPING, stiffness = FlightMotion.STIFFNESS),
+				)
 			}
 			launch {
-				travelY.animateTo(1f, spring(dampingRatio = 0.72f, stiffness = 280f))
+				travelX.animateTo(
+					1f,
+					spring(dampingRatio = FlightMotion.X_DAMPING, stiffness = FlightMotion.X_STIFFNESS),
+				)
 			}
 		}
 
-		// Hand off only once the target has stopped moving (list settled), so
-		// the swap to the real bubble is pixel-exact.
+		// Hand off only once the target has stopped moving (list settled), so the
+		// swap to the real bubble is pixel-exact.
 		withTimeoutOrNull(900) {
 			var last = liveTarget()
 			var stable = 0
@@ -156,63 +157,56 @@ internal fun SendFlightGhost(
 		currentOnLanded()
 	}
 
-	val origin = flight.origin
-	val startCorner = min(28f, with(density) { origin.height.toDp().value } / 2f)
-
-	val morphT = morph.value.coerceIn(0f, 1f)
-	val tailT = tail.value.coerceIn(0f, 1f)
-	val flightT = travelX.value.coerceIn(0f, 1f)
-
-	val roundCorner = lerpF(startCorner, 24f, morphT)
-	val tailCorner = lerpF(roundCorner, 8f, tailT) // 8dp == the real bubble's tail
+	// Look: driven by the vertical (leading) progress.
+	val flightT = travelY.value.coerceIn(0f, 1f)
+	val colorT = smoothstep(0.04f, 0.62f, flightT)
+	val tailT = smoothstep(0.45f, 0.95f, flightT)
 	val shape = RoundedCornerShape(
-		topStart = roundCorner.dp,
-		topEnd = roundCorner.dp,
-		bottomStart = roundCorner.dp,
-		bottomEnd = tailCorner.dp,
+		topStart = 24.dp,
+		topEnd = 24.dp,
+		bottomStart = 24.dp,
+		bottomEnd = lerpF(24f, 8f, tailT).dp, // the tail corner tightens while landing
 	)
-	val bubbleColor = lerp(scheme.surfaceContainerHighest, scheme.primaryContainer, morphT)
-	val contentColor = lerp(scheme.onSurface, scheme.onPrimaryContainer, morphT)
-	// Lifts off the composer, peaks mid-air, flat again on landing.
-	val elevation = (12f * sin(PI.toFloat() * flightT)).dp
+	val bubbleColor = lerp(scheme.surfaceContainerHighest, scheme.primaryContainer, colorT)
+	val contentColor = lerp(scheme.onSurface, scheme.onPrimaryContainer, colorT)
+	// Rises as it is plucked off the field, peaks mid-air, flat again on landing.
+	val elevation = (14f * sin(PI.toFloat() * flightT)).dp
+
+	val origin = flight.origin
+	val maxWidth = with(density) { flight.maxWidthPx.toDp() }
 
 	Column(
 		horizontalAlignment = Alignment.End,
 		modifier = Modifier
-			// Same max width as the real bubble, so it wraps text identically.
-			.widthIn(max = with(density) { maxBubbleWidthPx.toDp() })
+			.widthIn(max = maxWidth)
 			.graphicsLayer {
-				val w = size.width
-				val h = size.height
-				if (w <= 0f || h <= 0f) {
-					alpha = 0f
-					return@graphicsLayer
-				}
-				val target = liveTarget()
 				val container = containerOrigin()
-
-				// Until the target is known the ghost simply holds the origin.
-				val tx = target?.center?.x ?: origin.center.x
-				val ty = target?.center?.y ?: origin.center.y
+				val target = liveTarget() ?: origin
 				val px = travelX.value
 				val py = travelY.value
-				val cx = lerpF(origin.center.x, tx, px)
-				val cy = lerpF(origin.center.y, ty, py)
+				val cx = lerpF(origin.center.x, target.center.x, px)
+				val cy = lerpF(origin.center.y, target.center.y, py)
 
-				val t = px.coerceIn(0f, 1f)
-				val startScale = min(origin.width / w, origin.height / h).coerceIn(0.6f, 1.15f)
-				// Small "pop" mid-flight so it feels like a physical object.
-				val pop = 1f + 0.035f * sin(PI.toFloat() * t)
-				val s = lerpF(startScale, 1f, t) * pop
+				val t = py.coerceIn(0f, 1f)
+				// "Pluck": a quick pop right after leaving the field.
+				val pop = 1f + 0.05f * sin(PI.toFloat() * min(1f, t * 1.4f))
+				// Motion stretch while it is fast, squash when the spring overshoots the slot.
+				val stretch = 0.05f * sin(PI.toFloat() * t)
+				val squash = ((py - 1f).coerceIn(0f, 0.2f) * 2.5f).coerceAtMost(0.05f)
+				// An image message starts from the (bigger) composer rect, so it also
+				// scales from that size up to its final size.
+				val base = if (flight.withImage && size.width > 0f && size.height > 0f) {
+					val startScale = min(origin.width / size.width, origin.height / size.height)
+						.coerceIn(0.5f, 1.1f)
+					lerpF(startScale, 1f, t)
+				} else {
+					1f
+				}
 
-				// Squash & stretch from the real vertical speed (px / second).
-				val speed = abs(travelY.velocity) * abs(ty - origin.center.y)
-				val stretch = (speed / 24_000f).coerceAtMost(0.07f)
-
-				translationX = cx - container.x - w / 2f
-				translationY = cy - container.y - h / 2f
-				scaleX = s * (1f - stretch * 0.5f)
-				scaleY = s * (1f + stretch)
+				scaleX = base * pop * (1f - stretch * 0.6f + squash * 0.8f)
+				scaleY = base * pop * (1f + stretch - squash)
+				translationX = cx - container.x - size.width / 2f
+				translationY = cy - container.y - size.height / 2f
 			}
 			.clearAndSetSemantics {},
 	) {
