@@ -4,8 +4,10 @@ package com.agentic.aichat.ui.chat
 import android.content.res.Configuration
 import android.provider.Settings
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
@@ -13,8 +15,10 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.foundation.LocalOverscrollFactory
 import androidx.compose.foundation.background
@@ -23,6 +27,7 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -42,8 +47,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -154,6 +161,9 @@ fun ChatScreen(
 	var imageMessageIds by remember { mutableStateOf(setOf(PREVIEW_IMAGE_MESSAGE_ID)) }
 	var draft by remember { mutableStateOf("") }
 	var stagedImage by remember { mutableStateOf(false) }
+	var selectedModel by remember(chat.id, chat.modelId) { mutableStateOf(modelById(chat.modelId)) }
+	var selectedEffort by remember(chat.id) { mutableStateOf(ReasoningEffort.Medium) }
+	var showModelSheet by remember { mutableStateOf(false) }
 	val listState = rememberLazyListState()
 	val context = LocalContext.current
 	val density = LocalDensity.current
@@ -174,6 +184,7 @@ fun ChatScreen(
 
 	// Captured at send time only: the list never resizes with the keyboard, so this lifts the new slot above the composer.
 	var sendRevealBottomPx by remember { mutableStateOf(0f) }
+	var composerHeightPx by remember { mutableStateOf(0f) }
 	val imeBottomPx = WindowInsets.ime.getBottom(density)
 	LaunchedEffect(imeBottomPx) {
 		if (imeBottomPx == 0) sendRevealBottomPx = 0f
@@ -204,6 +215,7 @@ fun ChatScreen(
 			modifier = Modifier
 				.fillMaxSize()
 				.padding(padding)
+				.consumeWindowInsets(padding)
 				.onGloballyPositioned {
 					containerOrigin = it.positionInRoot()
 					containerSize = it.size
@@ -218,7 +230,7 @@ fun ChatScreen(
 						start = LIST_SIDE_PADDING,
 						end = LIST_SIDE_PADDING,
 						top = 8.dp,
-						bottom = 84.dp + with(density) { sendRevealBottomPx.toDp() },
+						bottom = (if (composerHeightPx > 0f) with(density) { composerHeightPx.toDp() } else 84.dp) + 8.dp + with(density) { sendRevealBottomPx.toDp() },
 					),
 					verticalArrangement = Arrangement.spacedBy(2.dp),
 					userScrollEnabled = flights.isEmpty(),
@@ -250,16 +262,18 @@ fun ChatScreen(
 				}
 			}
 
-			Composer(
+			ChatComposer(
 				draft = draft,
 				onDraftChange = { draft = it },
+				selectedModel = selectedModel,
+				onModelClick = { showModelSheet = true },
 				stagedImage = stagedImage,
 				onStageImage = { stagedImage = true },
 				onClearImage = { stagedImage = false },
 				onTextFieldBoundsInRoot = { composerBounds.textField = it },
 				onSend = {
 					val text = draft.trim()
-					if (text.isEmpty() && !stagedImage) return@Composer
+					if (text.isEmpty() && !stagedImage) return@ChatComposer
 					val id = UUID.randomUUID().toString()
 					val hasImage = stagedImage
 					if (hasImage) imageMessageIds += id
@@ -312,9 +326,13 @@ fun ChatScreen(
 				},
 				modifier = Modifier
 					.align(Alignment.BottomCenter)
-					.padding(start = 12.dp, end = 12.dp, bottom = 12.dp)
+					.padding(start = 12.dp, end = 12.dp, bottom = 8.dp)
 					.imePadding()
-					.onGloballyPositioned { composerBounds.composer = it.rectInRoot() },
+					.onGloballyPositioned {
+						composerBounds.composer = it.rectInRoot()
+						val contentHeightPx = (it.size.height - imeBottomPx).coerceAtLeast(0).toFloat()
+						if (contentHeightPx != composerHeightPx) composerHeightPx = contentHeightPx
+					},
 			)
 
 			flights.forEach { flight ->
@@ -329,6 +347,19 @@ fun ChatScreen(
 						},
 					)
 				}
+			}
+
+			if (showModelSheet) {
+				ModelPickerSheet(
+					selectedModel = selectedModel,
+					selectedEffort = selectedEffort,
+					onModelSelected = {
+						selectedModel = it
+						showModelSheet = false
+					},
+					onEffortSelected = { selectedEffort = it },
+					onDismiss = { showModelSheet = false },
+				)
 			}
 		}
 	}
@@ -521,9 +552,11 @@ internal fun ImagePlaceholder(modifier: Modifier = Modifier) {
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun Composer(
+private fun ChatComposer(
 		draft: String,
 		onDraftChange: (String) -> Unit,
+		selectedModel: AiChatModel,
+		onModelClick: () -> Unit,
 		stagedImage: Boolean,
 		onStageImage: () -> Unit,
 		onClearImage: () -> Unit,
@@ -532,7 +565,23 @@ private fun Composer(
 		onTextFieldBoundsInRoot: (Rect) -> Unit = {},
 ) {
 	val scheme = MaterialTheme.colorScheme
+	val motion = MaterialTheme.motionScheme
+	val density = LocalDensity.current
 	val canSend = draft.isNotBlank() || stagedImage
+
+	val imeVisible = WindowInsets.ime.getBottom(density) > 0
+	val expanded = imeVisible || draft.isNotBlank() || stagedImage
+
+	val corner by animateDpAsState(
+		targetValue = if (expanded) 28.dp else 96.dp,
+		animationSpec = motion.fastSpatialSpec(),
+		label = "composer-corners",
+	)
+	val container by animateColorAsState(
+		targetValue = if (expanded) scheme.surfaceContainerHigh else scheme.surfaceContainer,
+		animationSpec = motion.defaultEffectsSpec(),
+		label = "composer-container",
+	)
 	// Ghost starts on the typed glyphs, not the full-width field, so offset by the text layout bounds.
 	var fieldBoundsInRoot by remember { mutableStateOf<Rect?>(null) }
 	var textBoundsInField by remember { mutableStateOf<Rect?>(null) }
@@ -555,8 +604,8 @@ private fun Composer(
 		}
 	}
 	Surface(
-		shape = RoundedCornerShape(28.dp),
-		color = scheme.surfaceContainerHighest,
+		shape = RoundedCornerShape(corner),
+		color = container,
 		contentColor = scheme.onSurface,
 		tonalElevation = 2.dp,
 		modifier = modifier.fillMaxWidth(),
@@ -593,7 +642,7 @@ private fun Composer(
 			}
 			Row(verticalAlignment = Alignment.CenterVertically) {
 				IconButton(onClick = onStageImage) {
-					Icon(Icons.Filled.Image, contentDescription = "Attach image")
+					Icon(Icons.Filled.Add, contentDescription = "Attach")
 				}
 				BasicTextField(
 					value = draft,
@@ -662,6 +711,55 @@ private fun Composer(
 					Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send")
 				}
 			}
+			AnimatedVisibility(
+				visible = expanded,
+				enter = expandVertically(animationSpec = motion.slowSpatialSpec()) +
+					fadeIn(animationSpec = motion.defaultEffectsSpec()),
+				exit = shrinkVertically(animationSpec = motion.slowSpatialSpec()) +
+					fadeOut(animationSpec = motion.defaultEffectsSpec()),
+			) {
+				Row(
+					verticalAlignment = Alignment.CenterVertically,
+					modifier = Modifier.padding(start = 4.dp, top = 4.dp),
+				) {
+					ModelSelectorChip(
+						model = selectedModel,
+						onClick = onModelClick,
+					)
+				}
+			}
+		}
+	}
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun ModelSelectorChip(
+		model: AiChatModel,
+		onClick: () -> Unit,
+		modifier: Modifier = Modifier,
+) {
+	val scheme = MaterialTheme.colorScheme
+	Surface(
+		shape = CircleShape,
+		color = scheme.secondaryContainer,
+		contentColor = scheme.onSecondaryContainer,
+		onClick = onClick,
+		modifier = modifier,
+	) {
+		Row(
+			verticalAlignment = Alignment.CenterVertically,
+			modifier = Modifier.padding(start = 12.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
+		) {
+			Text(
+				text = model.name,
+				style = MaterialTheme.typography.labelLarge,
+			)
+			Icon(
+				imageVector = Icons.Filled.KeyboardArrowDown,
+				contentDescription = "Choose model",
+				modifier = Modifier.size(18.dp),
+			)
 		}
 	}
 }

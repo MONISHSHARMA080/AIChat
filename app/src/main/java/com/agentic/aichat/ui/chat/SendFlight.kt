@@ -90,7 +90,7 @@ internal fun SendFlightGhost(
 	val travelY = remember { Animatable(0f) }
 
 	LaunchedEffect(flight.id) {
-		val first = withTimeoutOrNull(300) {
+		val first = withTimeoutOrNull(300.milliseconds) {
 			snapshotFlow { liveTarget() }.filterNotNull().first()
 		}
 		if (first == null) {
@@ -141,7 +141,7 @@ internal fun SendFlightGhost(
 		bottomStart = 24.dp,
 		bottomEnd = lerpF(24f, 8f, tailT).dp,
 	)
-	val bubbleColor = lerp(scheme.surfaceContainerHighest, scheme.primaryContainer, colorT)
+	val bubbleColor = lerp(scheme.surfaceContainerHigh, scheme.primaryContainer, colorT)
 	val contentColor = lerp(scheme.onSurface, scheme.onPrimaryContainer, colorT)
 	val elevation = (14f * sin(PI.toFloat() * flightT)).dp
 
