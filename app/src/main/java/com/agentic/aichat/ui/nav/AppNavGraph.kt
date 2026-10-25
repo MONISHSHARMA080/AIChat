@@ -52,9 +52,7 @@ fun AppNavDisplay(
 				)
 			}
 			entry<ChatHome> {
-				ChatScreen(
-					onOpenSettings = { backStack.add(Settings) },
-				)
+				ChatScreen()
 			}
 			entry<Settings> {
 				SettingsScreen(

@@ -46,19 +46,21 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -154,7 +156,7 @@ private fun statusLabel(status: MessageStatus): String = when (status) {
 @Composable
 fun ChatScreen(
 		modifier: Modifier = Modifier,
-		onOpenSettings: () -> Unit = {},
+		onOpenChatList: () -> Unit = {},
 ) {
 	val scheme = MaterialTheme.colorScheme
 	val (chat, messages) = rememberPreviewChat()
@@ -203,9 +205,15 @@ fun ChatScreen(
 				title = {
 					Text(text = chat.title, style = MaterialTheme.typography.titleMedium)
 				},
-				actions = {
-					IconButton(onClick = onOpenSettings) {
-						Icon(Icons.Filled.Settings, contentDescription = "Settings")
+				navigationIcon = {
+					IconButton(
+						onClick = onOpenChatList,
+						shapes = IconButtonDefaults.shapes(
+							shape = CircleShape,
+							pressedShape = RoundedCornerShape(16.dp),
+						),
+					) {
+						Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Chat list")
 					}
 				},
 			)
