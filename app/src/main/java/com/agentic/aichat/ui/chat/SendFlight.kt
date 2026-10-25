@@ -38,18 +38,13 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.time.Duration.Companion.milliseconds
 
-/**
- * Tuning knobs. The vertical spring is also used for the list's item placement
- * (see ChatScreen), so older messages slide up in step with the flying bubble.
- *
- * Feels too bouncy -> raise DAMPING toward 0.9.   Too slow -> raise both stiffness values.
- */
+// Vertical spring doubles as the list's item placement spec, so rows rise in step with the bubble.
 internal object FlightMotion {
 	const val DAMPING = 0.74f
 	const val STIFFNESS = 380f
 
-	/** Horizontal slide: critically damped and softer, so it trails the rise slightly. */
 	const val X_DAMPING = 1f
 	const val X_STIFFNESS = 240f
 }
@@ -61,17 +56,12 @@ private fun smoothstep(edge0: Float, edge1: Float, x: Float): Float {
 	return t * t * (3f - 2f * t)
 }
 
-/**
- * Unclipped bounds in root coordinates. boundsInRoot() clips against ancestors,
- * which gives the wrong rect for a list row that is partly off-screen or behind
- * the composer, which is exactly where a freshly sent bubble first appears.
- */
+// boundsInRoot() clips against ancestors, so it misreports a fresh bubble that is still off-screen or behind the composer.
 internal fun LayoutCoordinates.rectInRoot(): Rect {
 	val p = positionInRoot()
 	return Rect(p.x, p.y, p.x + size.width, p.y + size.height)
 }
 
-/** Latest composer / text bounds, written by the composer, read at send time. */
 internal class ComposerBounds {
 	var composer: Rect? = null
 	var textField: Rect? = null
@@ -81,23 +71,10 @@ internal data class SendFlight(
 		val id: String,
 		val text: String,
 		val withImage: Boolean,
-		/** Where the ghost starts, in root coordinates. */
 		val origin: Rect,
-		/** The widest a sent bubble can be in the list, so the ghost wraps text identically. */
 		val maxWidthPx: Float,
 )
 
-/**
- * The bubble that flies from the composer to the message list.
- *
- * - Laid out once at the bubble's final size (same max width as the list row), so
- *   text never reflows. All motion is a graphicsLayer transform.
- * - It is visible from the very first frame, parked over the typed text, so there
- *   is no gap between the composer clearing and the bubble appearing. The flight
- *   starts as soon as the real bubble reports where it will land.
- * - Position = lerp(origin, liveTarget, progress). The target is read every frame,
- *   so the ghost follows the real bubble even while the list is still moving.
- */
 @Composable
 internal fun SendFlightGhost(
 		flight: SendFlight,
@@ -113,12 +90,10 @@ internal fun SendFlightGhost(
 	val travelY = remember { Animatable(0f) }
 
 	LaunchedEffect(flight.id) {
-		// Wait (normally one or two frames) for the real bubble to report its slot.
 		val first = withTimeoutOrNull(300) {
 			snapshotFlow { liveTarget() }.filterNotNull().first()
 		}
 		if (first == null) {
-			// Never got a target: skip the flight and just reveal the message.
 			currentOnLanded()
 			return@LaunchedEffect
 		}
@@ -140,7 +115,7 @@ internal fun SendFlightGhost(
 
 		// Hand off only once the target has stopped moving (list settled), so the
 		// swap to the real bubble is pixel-exact.
-		withTimeoutOrNull(900) {
+		withTimeoutOrNull(900.milliseconds) {
 			var last = liveTarget()
 			var stable = 0
 			while (stable < 3) {
@@ -157,7 +132,6 @@ internal fun SendFlightGhost(
 		currentOnLanded()
 	}
 
-	// Look: driven by the vertical (leading) progress.
 	val flightT = travelY.value.coerceIn(0f, 1f)
 	val colorT = smoothstep(0.04f, 0.62f, flightT)
 	val tailT = smoothstep(0.45f, 0.95f, flightT)
@@ -165,11 +139,10 @@ internal fun SendFlightGhost(
 		topStart = 24.dp,
 		topEnd = 24.dp,
 		bottomStart = 24.dp,
-		bottomEnd = lerpF(24f, 8f, tailT).dp, // the tail corner tightens while landing
+		bottomEnd = lerpF(24f, 8f, tailT).dp,
 	)
 	val bubbleColor = lerp(scheme.surfaceContainerHighest, scheme.primaryContainer, colorT)
 	val contentColor = lerp(scheme.onSurface, scheme.onPrimaryContainer, colorT)
-	// Rises as it is plucked off the field, peaks mid-air, flat again on landing.
 	val elevation = (14f * sin(PI.toFloat() * flightT)).dp
 
 	val origin = flight.origin
@@ -188,13 +161,9 @@ internal fun SendFlightGhost(
 				val cy = lerpF(origin.center.y, target.center.y, py)
 
 				val t = py.coerceIn(0f, 1f)
-				// "Pluck": a quick pop right after leaving the field.
 				val pop = 1f + 0.05f * sin(PI.toFloat() * min(1f, t * 1.4f))
-				// Motion stretch while it is fast, squash when the spring overshoots the slot.
 				val stretch = 0.05f * sin(PI.toFloat() * t)
 				val squash = ((py - 1f).coerceIn(0f, 0.2f) * 2.5f).coerceAtMost(0.05f)
-				// An image message starts from the (bigger) composer rect, so it also
-				// scales from that size up to its final size.
 				val base = if (flight.withImage && size.width > 0f && size.height > 0f) {
 					val startScale = min(origin.width / size.width, origin.height / size.height)
 						.coerceIn(0.5f, 1.1f)

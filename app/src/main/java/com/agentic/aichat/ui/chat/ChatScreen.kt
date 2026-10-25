@@ -114,14 +114,6 @@ private fun rememberPreviewChat(): Pair<ChatEntity, SnapshotStateList<MessageEnt
 	}
 	val messages = remember {
 		mutableStateListOf(
-//			MessageEntity(
-//				id = "preview-m1",
-//				chatId = chat.id,
-//				role = MessageRole.USER,
-//				content = "Are we still on for Saturday?",
-//				createdAt = now - day - 2 * 60 * 60 * 1000L,
-//				status = MessageStatus.DONE,
-//			),
 			MessageEntity(
 				id = "preview-m2",
 				chatId = chat.id,
@@ -138,30 +130,6 @@ private fun rememberPreviewChat(): Pair<ChatEntity, SnapshotStateList<MessageEnt
 				createdAt = now - 3 * 60 * 60 * 1000L,
 				status = MessageStatus.DONE,
 			),
-//            MessageEntity(
-//                id = "preview-m4",
-//                chatId = chat.id,
-//                role = MessageRole.ASSISTANT,
-//                content = "Love this brief. Here are three elevated athleisure fits.",
-//                createdAt = now - 3 * 60 * 60 * 1000L + 60_000L,
-//                status = MessageStatus.DONE,
-//            ),
-//            MessageEntity(
-//                id = "preview-m5",
-//                chatId = chat.id,
-//                role = MessageRole.USER,
-//                content = "Second one. Can you save it to the album?",
-//                createdAt = now - 2 * 60 * 60 * 1000L,
-//                status = MessageStatus.DONE,
-//            ),
-//            MessageEntity(
-//                id = "preview-m6",
-//                chatId = chat.id,
-//                role = MessageRole.ASSISTANT,
-//                content = "Saving it now.",
-//                createdAt = now - 2 * 60 * 60 * 1000L + 30_000L,
-//                status = MessageStatus.STREAMING,
-//            ),
 		)
 	}
 	return chat to messages
@@ -174,9 +142,6 @@ private fun statusLabel(status: MessageStatus): String = when (status) {
 	MessageStatus.DONE -> ""
 }
 
-// ---------------------------------------------------------------------------
-// Screen
-// ---------------------------------------------------------------------------
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -194,39 +159,26 @@ fun ChatScreen(
 	val density = LocalDensity.current
 	val haptic = LocalHapticFeedback.current
 
-	// Messages currently "in the air". Each one has its own independent ghost,
-	// so rapid sends overlap naturally instead of queueing behind each other.
 	var flights by remember { mutableStateOf<List<SendFlight>>(emptyList()) }
 	val flightIds = flights.map { it.id }.toSet()
-	// Live bounds (root coordinates) of each in-flight message's real, hidden
-	// bubble. The ghost reads this every frame, so it tracks the bubble even
-	// while the list is still moving.
 	val flightTargets = remember { mutableStateMapOf<String, Rect>() }
 	var containerOrigin by remember { mutableStateOf(Offset.Zero) }
 	var containerSize by remember { mutableStateOf(IntSize.Zero) }
 	val composerBounds = remember { ComposerBounds() }
 
-	// Messages that already exist must not play the "new assistant message"
-	// entrance when the screen first opens.
 	var seenAssistantIds by remember {
 		mutableStateOf(
 			messages.filter { it.role == MessageRole.ASSISTANT }.map { it.id }.toSet(),
 		)
 	}
 
-	// Extra bottom padding captured at send time only. The list is stationary
-	// and full-height, so with the keyboard open the newest slot would sit
-	// behind it; this lifts the slot above the composer as part of the send.
-	// Tapping the text box never touches it. Rows glide (animateItem) when it
-	// changes.
+	// Captured at send time only: the list never resizes with the keyboard, so this lifts the new slot above the composer.
 	var sendRevealBottomPx by remember { mutableStateOf(0f) }
 	val imeBottomPx = WindowInsets.ime.getBottom(density)
 	LaunchedEffect(imeBottomPx) {
 		if (imeBottomPx == 0) sendRevealBottomPx = 0f
 	}
 
-	// Bring the newest slot into view after every send. scrollToItem is
-	// consumed on the next measure pass, so it is not racing the insert.
 	var scrollTick by remember { mutableIntStateOf(0) }
 	LaunchedEffect(scrollTick) {
 		if (scrollTick > 0) listState.scrollToItem(0)
@@ -257,10 +209,6 @@ fun ChatScreen(
 					containerSize = it.size
 				},
 		) {
-			// The list fills the whole Box and is never in a resizing Column
-			// with the composer, so tapping the text field or opening/closing
-			// the keyboard cannot resize, re-anchor, or pull it. Only the
-			// composer overlay below moves with the IME.
 			val display = messages.filter { it.role != MessageRole.SYSTEM }.reversed()
 			CompositionLocalProvider(LocalOverscrollFactory provides null) {
 				LazyColumn(
@@ -289,9 +237,6 @@ fun ChatScreen(
 									flightTargets[message.id] = rect
 								}
 							},
-							// Older rows slide up on the SAME spring as the flying
-							// bubble, so the whole screen moves as one. No fade on
-							// the new row: its ghost is what the user sees.
 							modifier = Modifier.animateItem(
 								fadeInSpec = null,
 								placementSpec = spring(
@@ -320,23 +265,14 @@ fun ChatScreen(
 					if (hasImage) imageMessageIds += id
 					sendRevealBottomPx = imeBottomPx.toFloat()
 
-					// A light tick as the bubble leaves the field.
 					haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
 
-					// Reduce-motion (animator duration scale 0): skip the
-					// flight. The message is inserted and readable immediately
-					// either way, so it is announced without waiting for any
-					// animation.
 					val durationScale = Settings.Global.getFloat(
 						context.contentResolver,
 						Settings.Global.ANIMATOR_DURATION_SCALE,
 						1f,
 					)
 
-					// Snapshot where the ghost starts BEFORE the draft clears:
-					// on the typed text for a text message (padded to match
-					// the bubble's own padding), on the whole composer when
-					// an image is attached.
 					val padX = with(density) { 16.dp.toPx() }
 					val padY = with(density) { 12.dp.toPx() }
 					val textRect = composerBounds.textField?.let {
@@ -348,8 +284,6 @@ fun ChatScreen(
 						textRect ?: composerBounds.composer
 					}
 
-					// Same width cap the list row applies to a user bubble (85% of
-					// the row), so the ghost wraps the text exactly like the real one.
 					val sidePx = with(density) { LIST_SIDE_PADDING.toPx() }
 					val maxWidthPx = 0.85f * (containerSize.width - 2f * sidePx)
 
@@ -376,8 +310,6 @@ fun ChatScreen(
 					stagedImage = false
 					scrollTick++
 				},
-				// Only the composer consumes the IME inset (once, here).
-				// It overlays the stationary list instead of resizing it.
 				modifier = Modifier
 					.align(Alignment.BottomCenter)
 					.padding(start = 12.dp, end = 12.dp, bottom = 12.dp)
@@ -385,7 +317,6 @@ fun ChatScreen(
 					.onGloballyPositioned { composerBounds.composer = it.rectInRoot() },
 			)
 
-			// Ghosts draw above both the list and the composer.
 			flights.forEach { flight ->
 				key(flight.id) {
 					SendFlightGhost(
@@ -393,8 +324,6 @@ fun ChatScreen(
 						liveTarget = { flightTargets[flight.id] },
 						containerOrigin = { containerOrigin },
 						onLanded = {
-							// Removing the ghost and un-hiding the real bubble
-							// happen in the same recomposition: no flicker.
 							flights = flights.filterNot { it.id == flight.id }
 							flightTargets.remove(flight.id)
 						},
@@ -407,9 +336,6 @@ fun ChatScreen(
 
 private val LIST_SIDE_PADDING = 12.dp
 
-// ---------------------------------------------------------------------------
-// Message rows
-// ---------------------------------------------------------------------------
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -431,7 +357,6 @@ private fun MessageRow(
 			modifier = modifier,
 		)
 		else -> {
-			// AI replies: normal item entry from the left, no flight.
 			var visible by remember(message.id) { mutableStateOf(!isNewAssistant) }
 			LaunchedEffect(message.id) {
 				if (isNewAssistant) {
@@ -473,16 +398,13 @@ private fun UserMessage(
 		modifier = modifier.fillMaxWidth().padding(vertical = 2.dp),
 		horizontalArrangement = Arrangement.End,
 	) {
-		// 15% spacer + a content-sized column capped at 85%. Unlike
-		// fillMaxWidth(0.85f), the column's bounds hug the bubble, so those
-		// bounds are exactly where the ghost has to land.
+		// Column hugs the bubble (unlike fillMaxWidth(0.85f)) so its bounds are the ghost's landing target.
 		Spacer(modifier = Modifier.weight(0.15f))
 		Column(
 			horizontalAlignment = Alignment.End,
 			modifier = Modifier
 				.weight(0.85f, fill = false)
-				// Still laid out (so its bounds are the flight destination)
-				// while the ghost is flying; revealed when the ghost lands.
+				// Stays laid out while hidden so it keeps reporting the landing bounds.
 				.graphicsLayer { alpha = if (hidden) 0f else 1f }
 				.onGloballyPositioned { if (hidden) onBoundsInRoot(it.rectInRoot()) },
 		) {
@@ -570,7 +492,6 @@ private fun StreamingText(text: String, modifier: Modifier = Modifier) {
 	)
 }
 
-/** internal: also used by the flying ghost in SendFlight.kt. */
 @Composable
 internal fun ImagePlaceholder(modifier: Modifier = Modifier) {
 	val scheme = MaterialTheme.colorScheme
@@ -597,9 +518,6 @@ internal fun ImagePlaceholder(modifier: Modifier = Modifier) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Composer
-// ---------------------------------------------------------------------------
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -615,9 +533,7 @@ private fun Composer(
 ) {
 	val scheme = MaterialTheme.colorScheme
 	val canSend = draft.isNotBlank() || stagedImage
-	// The field's layout box spans the full composer width; the ghost must
-	// start on the typed glyphs, so report field bounds offset by the
-	// actual text layout bounds inside the field.
+	// Ghost starts on the typed glyphs, not the full-width field, so offset by the text layout bounds.
 	var fieldBoundsInRoot by remember { mutableStateOf<Rect?>(null) }
 	var textBoundsInField by remember { mutableStateOf<Rect?>(null) }
 	val reportTextBounds = {
@@ -648,8 +564,6 @@ private fun Composer(
 		Column(
 			modifier = Modifier
 				.padding(horizontal = 8.dp, vertical = 8.dp)
-				// The composer folds back to one line on the same spring as the
-				// flight, so it settles while the bubble is still in the air.
 				.animateContentSize(
 					animationSpec = spring(
 						dampingRatio = FlightMotion.DAMPING,
@@ -699,8 +613,6 @@ private fun Composer(
 							reportTextBounds()
 						}
 					},
-					// Same type style as the sent bubble, so the glyphs don't
-					// change size when the ghost takes over from the field.
 					textStyle = MaterialTheme.typography.bodyLarge.copy(color = scheme.onSurface),
 					cursorBrush = SolidColor(scheme.primary),
 					maxLines = 4,
