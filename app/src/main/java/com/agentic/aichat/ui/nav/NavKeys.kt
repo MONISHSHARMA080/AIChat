@@ -16,6 +16,9 @@ data object ChatHome : NavKey
 data object ChatList : NavKey
 
 @Serializable
+data class ChatDetail(val chatId: String?) : NavKey
+
+@Serializable
 data object Settings : NavKey
 
 @Serializable

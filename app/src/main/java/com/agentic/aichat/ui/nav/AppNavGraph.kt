@@ -64,10 +64,17 @@ fun AppNavDisplay(
 			entry<ChatHome> {
 				ChatScreen(onOpenChatList = { backStack.add(ChatList) })
 			}
+			entry<ChatDetail> { key ->
+				// use this key to fetch the chat form the view model
+				ChatScreen(
+					chatId = key.chatId,
+					onOpenChatList = { backStack.add(ChatList) },
+				)
+			}
 			entry<ChatList> {
 				ChatListScreen(
 					onBack = { backStack.popSafely() },
-					onChatSelected = { backStack.popSafely() },
+					onChatSelected = { chatId -> backStack.add(ChatDetail(chatId)) },
 					onOpenSettings = { backStack.add(Settings) },
 				)
 			}

@@ -156,6 +156,7 @@ private fun statusLabel(status: MessageStatus): String = when (status) {
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun ChatScreen(
+		chatId: String? = null,
 		modifier: Modifier = Modifier,
 		onOpenChatList: () -> Unit = {},
 ) {
