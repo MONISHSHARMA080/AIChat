@@ -8,7 +8,7 @@ import androidx.compose.ui.Modifier
  *
  * Blank on purpose. Planned content:
  * - Default AI model picker (same options as the in-chat model picker).
- * - Account row (signed-in user from [com.agentic.aichat.data.auth.AuthRepository]).
+ * - Account row (signed-in Firebase user).
  * - Upgrade entry → [onOpenPaywall].
  * - Send feedback (triggers Play in-app review from the review/ wiring).
  * - Sign out → [onSignOut].

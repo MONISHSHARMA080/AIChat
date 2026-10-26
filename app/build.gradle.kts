@@ -1,10 +1,23 @@
+import java.util.Properties
+
 plugins {
 	alias(libs.plugins.android.application)
 	alias(libs.plugins.kotlin.compose)
 	alias(libs.plugins.kotlin.serialization)
 	alias(libs.plugins.ksp)
 	alias(libs.plugins.hilt)
+	alias(libs.plugins.google.services)
 }
+
+val localProperties = Properties()
+val localPropertiesFile = rootProject.file("local.properties")
+if (localPropertiesFile.exists()) {
+	localPropertiesFile.inputStream().use { localProperties.load(it) }
+}
+val googleWebClientId: String =
+	localProperties.getProperty("google.web.client.id")
+		?: System.getenv("GOOGLE_WEB_CLIENT_ID")
+		?: ""
 
 android {
 	namespace = "com.agentic.aichat"
@@ -20,6 +33,7 @@ android {
 		versionName = "1.0"
 
 		testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+		buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleWebClientId\"")
 	}
 
 	buildTypes {
@@ -35,6 +49,7 @@ android {
 	}
 	buildFeatures {
 		compose = true
+		buildConfig = true
 	}
 }
 
@@ -63,6 +78,11 @@ dependencies {
 	ksp(libs.hilt.android.compiler)
 	implementation(libs.androidx.hilt.navigation.compose)
 	ksp(libs.androidx.room3.compiler)
+	implementation(platform(libs.firebase.bom))
+	implementation(libs.firebase.auth)
+	implementation(libs.androidx.credentials)
+	implementation(libs.androidx.credentials.play.services)
+	implementation(libs.googleid)
 	testImplementation(libs.junit)
 	androidTestImplementation(platform(libs.androidx.compose.bom))
 	androidTestImplementation(libs.androidx.compose.ui.test.junit4)
