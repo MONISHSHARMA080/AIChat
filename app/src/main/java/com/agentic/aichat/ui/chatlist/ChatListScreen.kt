@@ -5,8 +5,6 @@ import android.content.res.Configuration
 import android.text.format.DateUtils
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -21,11 +19,9 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -68,20 +64,19 @@ private val GroupContainerShape = RoundedCornerShape(28.dp)
 private fun rememberDummyChats(): List<ChatListEntry> = remember {
 	val now = System.currentTimeMillis()
 	listOf(
-			dummyChat("c-music", "Music night out", "Doors at 8 — see you there!", now - TimeUnit.MINUTES.toMillis(12), isPinned = true),
-			dummyChat("c-trip", "Weekend trip", "Train tickets are booked for Saturday.", now - TimeUnit.HOURS.toMillis(3), isPinned = true, modelId = "spark-reasoner"),
-			dummyChat("c-recipes", "Smoothie recipes", "This mango one is a keeper, saved.", now - TimeUnit.HOURS.toMillis(26)),
-			dummyChat("c-rent", "Apartment hunt", "Landlord replied, viewing at 5pm.", now - TimeUnit.HOURS.toMillis(30), modelId = "spark-1-mini"),
-			dummyChat("c-gym", "Gym plan", "I added two more pull-up days.", now - TimeUnit.DAYS.toMillis(2)),
-			dummyChat("c-thesis", "Thesis outline", "Chapter 3 skeleton is ready for review.", now - TimeUnit.DAYS.toMillis(4), modelId = "spark-reasoner"),
-			dummyChat("c-plants", "Plant care", "The fiddle leaf needs water tomorrow.", now - TimeUnit.DAYS.toMillis(6), modelId = "spark-1-mini"),
+			dummyChat("c-music", "Music night out", now - TimeUnit.MINUTES.toMillis(12), isPinned = true),
+			dummyChat("c-trip", "Weekend trip", now - TimeUnit.HOURS.toMillis(3), isPinned = true, modelId = "spark-reasoner"),
+			dummyChat("c-recipes", "Smoothie recipes", now - TimeUnit.HOURS.toMillis(26)),
+			dummyChat("c-rent", "Apartment hunt", now - TimeUnit.HOURS.toMillis(30), modelId = "spark-1-mini"),
+			dummyChat("c-gym", "Gym plan", now - TimeUnit.DAYS.toMillis(2)),
+			dummyChat("c-thesis", "Thesis outline", now - TimeUnit.DAYS.toMillis(4), modelId = "spark-reasoner"),
+			dummyChat("c-plants", "Plant care", now - TimeUnit.DAYS.toMillis(6), modelId = "spark-1-mini"),
 		)
 }
 
 private fun dummyChat(
 		id: String,
 		title: String,
-		preview: String,
 		updatedAt: Long,
 		isPinned: Boolean = false,
 		modelId: String = "spark-1",
@@ -92,8 +87,8 @@ private fun dummyChat(
 			modelId = modelId,
 			createdAt = updatedAt - TimeUnit.DAYS.toMillis(3),
 			updatedAt = updatedAt,
-			lastMessageText = preview,
-			lastMessageAt = updatedAt,
+			lastMessageText = null,
+			lastMessageAt = null,
 		),
 		isPinned = isPinned,
 )
@@ -240,22 +235,7 @@ private fun ChatRow(
 			.clickable(onClickLabel = "Open chat", onClick = onClick)
 			.padding(start = 12.dp, end = 16.dp, top = 10.dp, bottom = 10.dp),
 	) {
-		Box(
-			contentAlignment = Alignment.Center,
-			modifier = Modifier
-				.size(44.dp)
-				.clip(CircleShape)
-				.background(scheme.tertiaryContainer),
-		) {
-			Icon(
-				imageVector = Icons.AutoMirrored.Filled.Chat,
-				contentDescription = null,
-				tint = scheme.onTertiaryContainer,
-				modifier = Modifier.size(22.dp),
-			)
-		}
 		Column(
-			verticalArrangement = Arrangement.spacedBy(2.dp),
 			modifier = Modifier
 				.weight(1f)
 				.padding(horizontal = 12.dp),
@@ -266,16 +246,6 @@ private fun ChatRow(
 				maxLines = 1,
 				overflow = TextOverflow.Ellipsis,
 			)
-			val preview = entry.chat.lastMessageText.orEmpty()
-			if (preview.isNotBlank()) {
-				Text(
-					text = preview,
-					style = MaterialTheme.typography.bodyMedium,
-					color = scheme.onSurfaceVariant,
-					maxLines = 1,
-					overflow = TextOverflow.Ellipsis,
-				)
-			}
 		}
 		Text(
 			text = DateUtils.getRelativeTimeSpanString(entry.chat.updatedAt).toString(),
