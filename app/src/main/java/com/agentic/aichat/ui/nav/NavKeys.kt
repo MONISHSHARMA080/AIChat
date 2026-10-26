@@ -13,6 +13,9 @@ data object SignIn : NavKey
 data object ChatHome : NavKey
 
 @Serializable
+data object ChatList : NavKey
+
+@Serializable
 data object Settings : NavKey
 
 @Serializable

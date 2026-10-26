@@ -57,7 +57,6 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedIconButton
@@ -69,6 +68,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -101,6 +101,7 @@ import com.agentic.aichat.data.chat.db.entity.MessageEntity
 import com.agentic.aichat.data.chat.db.entity.MessageRole
 import com.agentic.aichat.data.chat.db.entity.MessageStatus
 import com.agentic.aichat.ui.theme.AIChatTheme
+import com.agentic.aichat.ui.theme.navIconButtonShapes
 import java.util.UUID
 import kotlin.collections.filter
 
@@ -185,8 +186,8 @@ fun ChatScreen(
 	}
 
 	// Captured at send time only: the list never resizes with the keyboard, so this lifts the new slot above the composer.
-	var sendRevealBottomPx by remember { mutableStateOf(0f) }
-	var composerHeightPx by remember { mutableStateOf(0f) }
+	var sendRevealBottomPx by remember { mutableFloatStateOf(0f) }
+	var composerHeightPx by remember { mutableFloatStateOf(0f) }
 	val imeBottomPx = WindowInsets.ime.getBottom(density)
 	LaunchedEffect(imeBottomPx) {
 		if (imeBottomPx == 0) sendRevealBottomPx = 0f
@@ -208,10 +209,7 @@ fun ChatScreen(
 				navigationIcon = {
 					IconButton(
 						onClick = onOpenChatList,
-						shapes = IconButtonDefaults.shapes(
-							shape = CircleShape,
-							pressedShape = RoundedCornerShape(16.dp),
-						),
+						shapes = navIconButtonShapes(),
 					) {
 						Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Chat list")
 					}
