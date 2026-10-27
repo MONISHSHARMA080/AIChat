@@ -34,8 +34,8 @@ private fun NavBackStack<NavKey>.popSafely() {
 fun AppNavDisplay(
 	modifier: Modifier = Modifier,
 ) {
-	val backStack = rememberAppBackStack(SignIn)
-//	val backStack = rememberAppBackStack(Onboarding)
+//	val backStack = rememberAppBackStack(SignIn)
+	val backStack = rememberAppBackStack(Onboarding)
 
 	Surface(
 		modifier = modifier.fillMaxSize(),

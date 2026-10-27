@@ -14,6 +14,7 @@ import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
+import com.google.firebase.auth.PhoneMultiFactorInfo
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -78,8 +79,35 @@ class AuthRepository @Inject constructor(
 
 	private fun FirebaseUser.toAuthUser() = AuthUser(
 		uid = uid,
+		providerId = providerId,
 		displayName = displayName,
 		email = email,
+		phoneNumber = phoneNumber,
 		photoUrl = photoUrl?.toString(),
+		isAnonymous = isAnonymous,
+		isEmailVerified = isEmailVerified,
+		tenantId = tenantId,
+		creationTimestamp = metadata?.creationTimestamp,
+		lastSignInTimestamp = metadata?.lastSignInTimestamp,
+//		providerData = providerData.map { info ->
+//			AuthProviderData(
+//				providerId = info.providerId,
+//				uid = info.uid,
+//				displayName = info.displayName,
+//				email = info.email,
+//				phoneNumber = info.phoneNumber,
+//				photoUrl = info.photoUrl?.toString(),
+//				isEmailVerified = info.isEmailVerified,
+//			)
+//		},
+//		enrolledFactors = multiFactor.enrolledFactors.map { factor ->
+//			AuthFactorInfo(
+//				factorId = factor.factorId,
+//				uid = factor.uid,
+//				displayName = factor.displayName,
+//				enrollmentTimestamp = factor.enrollmentTimestamp,
+//				phoneNumber = (factor as? PhoneMultiFactorInfo)?.phoneNumber,
+//			)
+//		},
 	)
 }
