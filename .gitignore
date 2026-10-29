@@ -9,6 +9,7 @@ local.properties
 # Log/OS Files
 *.log
 
+node_modules/
 # Android Studio generated files and folders
 captures/
 .externalNativeBuild/
@@ -30,6 +31,12 @@ render.experimental.xml
 
 # Google Services (e.g. APIs or Firebase)
 google-services.json
+
+# Firebase Functions emulator local files
+functions/.env.local
+functions/.secret.local
+functions/lib/
+.turso-local/
 
 # Android Profiling
 *.hprof
