@@ -1,5 +1,7 @@
 {
   "projects": {
-    "default": "TBD"
-  }
+    "AiChatApp": "aichat-8d4f3"
+  },
+  "targets": {},
+  "etags": {}
 }
