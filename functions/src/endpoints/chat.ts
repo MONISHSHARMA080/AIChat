@@ -6,7 +6,7 @@ import { onRequest, type Request } from "firebase-functions/v2/https";
 import type { Response } from "express";
 import { streamText } from "ai";
 import { z } from "zod";
-import { AI_GATEWAY_API_KEY, REVENUECAT_SECRET_API_KEY } from "../config";
+import { AI_GATEWAY_API_KEY, REVENUECAT_COIN_CODE, REVENUECAT_SECRET_API_KEY } from "../config";
 import { fetchModels, getGateway, type Pricing } from "./listModels";
 
 if (!getApps().length) initializeApp();
@@ -16,7 +16,6 @@ const REVENUECAT_BASE = "https://api.revenuecat.com/v2";
 const envSchema = z.object({
   USD_PER_COIN: z.coerce.number().positive(),
   REVENUECAT_PROJECT_ID: z.string().min(1),
-  REVENUECAT_CURRENCY_CODE: z.string().min(1),
 });
 
 const bodySchema = z.object({
@@ -141,7 +140,7 @@ async function getBalance(uid: string, env: Env): Promise<number> {
   const parsed = balancesSchema.safeParse(await res.json());
   if (!parsed.success) throw new ApiError(502, "unexpected balance response");
   const item = parsed.data.items.find(
-    (i) => i.currency_code === env.REVENUECAT_CURRENCY_CODE,
+    (i) => i.currency_code === REVENUECAT_COIN_CODE.value(),
   );
   return item?.balance ?? 0;
 }
@@ -208,7 +207,7 @@ async function deductCoins(
         "Idempotency-Key": key,
       },
       body: JSON.stringify({
-        adjustments: { [env.REVENUECAT_CURRENCY_CODE]: -coins },
+        adjustments: { [REVENUECAT_COIN_CODE.value()]: -coins },
       }),
     },
   );
@@ -221,7 +220,7 @@ async function deductCoins(
   const parsed = balancesSchema.safeParse(await res.json());
   if (!parsed.success) throw new ApiError(502, "unexpected deduction response");
   const item = parsed.data.items.find(
-    (i) => i.currency_code === env.REVENUECAT_CURRENCY_CODE,
+    (i) => i.currency_code === REVENUECAT_COIN_CODE.value(),
   );
   return { charged: coins, balance: item?.balance ?? 0 };
 }

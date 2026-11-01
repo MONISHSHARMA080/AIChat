@@ -1,0 +1,1 @@
+{"root":["./src/auth.ts","./src/config.ts","./src/gateway.ts","./src/index.ts","./src/parse.ts","./src/revenuecat.ts","./src/endpoints/chat.ts","./src/endpoints/listModels.ts","./src/endpoints/usage.ts"],"version":"5.9.3"}
