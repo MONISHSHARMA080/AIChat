@@ -6,9 +6,10 @@ import { AI_GATEWAY_API_KEY } from "../config";
 
 const CATALOG_URL = "https://ai-gateway.vercel.sh/v1/models";
 
-export const gateway = createGateway({
-  apiKey: AI_GATEWAY_API_KEY.value(),
-});
+export const getGateway = () =>
+  createGateway({
+    apiKey: AI_GATEWAY_API_KEY.value(),
+  });
 
 const catalogSchema = z.object({
   data: z.array(
@@ -56,7 +57,7 @@ async function fetchReasoning(): Promise<Map<string, Reasoning>> {
 
 export async function fetchModels(): Promise<ModelInfo[]> {
   const [sdk, reasoning] = await Promise.all([
-    gateway.getAvailableModels(),
+    getGateway().getAvailableModels(),
     fetchReasoning(),
   ]);
 
@@ -76,20 +77,23 @@ export async function fetchModels(): Promise<ModelInfo[]> {
     });
 }
 
-export const models = onRequest({ cors: true }, async (req, res) => {
-  if (req.method !== "GET") {
-    res.status(405).json({ error: "method not allowed" });
-    return;
-  }
+export const listModels = onRequest(
+  { cors: true, secrets: [AI_GATEWAY_API_KEY] },
+  async (req, res) => {
+    if (req.method !== "GET") {
+      res.status(405).json({ error: "method not allowed" });
+      return;
+    }
 
-  const list = await fetchModels().catch((error) => {
-    logger.error("model list failed", error);
-    return null;
-  });
-  if (!list) {
-    res.status(502).json({ error: "could not load models" });
-    return;
-  }
+    const list = await fetchModels().catch((error) => {
+      logger.error("model list failed", error);
+      return null;
+    });
+    if (!list) {
+      res.status(502).json({ error: "could not load models" });
+      return;
+    }
 
-  res.json({ models: list });
-});
+    res.json({ models: list });
+  },
+);

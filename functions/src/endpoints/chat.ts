@@ -6,8 +6,8 @@ import { onRequest, type Request } from "firebase-functions/v2/https";
 import type { Response } from "express";
 import { streamText } from "ai";
 import { z } from "zod";
-import { REVENUECAT_SECRET_API_KEY } from "../config";
-import { fetchModels, gateway, type Pricing } from "./listModels";
+import { AI_GATEWAY_API_KEY, REVENUECAT_SECRET_API_KEY } from "../config";
+import { fetchModels, getGateway, type Pricing } from "./listModels";
 
 if (!getApps().length) initializeApp();
 
@@ -131,7 +131,7 @@ async function resolvePricing(body: Body): Promise<Pricing> {
 async function getBalance(uid: string, env: Env): Promise<number> {
   const res = await fetch(
     `${REVENUECAT_BASE}/projects/${env.REVENUECAT_PROJECT_ID}/customers/${encodeURIComponent(uid)}/virtual_currencies`,
-    { headers: { Authorization: `Bearer ${REVENUECAT_SECRET_API_KEY}` } },
+    { headers: { Authorization: `Bearer ${REVENUECAT_SECRET_API_KEY.value()}` } },
   );
   if (res.status === 404) return 0;
   if (!res.ok) {
@@ -164,7 +164,7 @@ function checkLowCredit(input: {
 async function streamChat(res: Response, body: Body, uid: string): Promise<number> {
   const errors: unknown[] = [];
   const result = streamText({
-    model: gateway(body.model),
+    model: getGateway()(body.model),
     messages: body.messages,
     reasoning: body.reasoning as ReasoningLevel | undefined,
     providerOptions: { gateway: { user: uid, tags: ["chat"] } },
@@ -203,7 +203,7 @@ async function deductCoins(
     {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${REVENUECAT_SECRET_API_KEY}`,
+        Authorization: `Bearer ${REVENUECAT_SECRET_API_KEY.value()}`,
         "Content-Type": "application/json",
         "Idempotency-Key": key,
       },
@@ -226,59 +226,66 @@ async function deductCoins(
   return { charged: coins, balance: item?.balance ?? 0 };
 }
 
-export const chat = onRequest({ cors: true, timeoutSeconds: 300 }, async (req, res) => {
-  if (req.method !== "POST") return fail(res, new ApiError(405, "method not allowed"));
+export const chat = onRequest(
+  {
+    cors: true,
+    timeoutSeconds: 300,
+    secrets: [AI_GATEWAY_API_KEY, REVENUECAT_SECRET_API_KEY],
+  },
+  async (req, res) => {
+    if (req.method !== "POST") return fail(res, new ApiError(405, "method not allowed"));
 
-  const [env, envErr] = await attempt(readEnv());
-  if (envErr) return fail(res, envErr);
+    const [env, envErr] = await attempt(readEnv());
+    if (envErr) return fail(res, envErr);
 
-  const [user, authErr] = await attempt(authenticate(req));
-  if (authErr) return fail(res, authErr);
-  logger.info("chat request", { uid: user.uid, email: user.email });
+    const [user, authErr] = await attempt(authenticate(req));
+    if (authErr) return fail(res, authErr);
+    logger.info("chat request", { uid: user.uid, email: user.email });
 
-  const [body, bodyErr] = await attempt(parseBody(req));
-  if (bodyErr) return fail(res, bodyErr);
+    const [body, bodyErr] = await attempt(parseBody(req));
+    if (bodyErr) return fail(res, bodyErr);
 
-  const [prep, prepErr] = await attempt(
-    Promise.all([resolvePricing(body), getBalance(user.uid, env)]),
-  );
-  if (prepErr) return fail(res, prepErr);
-  const [pricing, balance] = prep;
+    const [prep, prepErr] = await attempt(
+      Promise.all([resolvePricing(body), getBalance(user.uid, env)]),
+    );
+    if (prepErr) return fail(res, prepErr);
+    const [pricing, balance] = prep;
 
-  const denied = checkLowCredit({
-    balance,
-    pricing,
-    messages: body.messages,
-    usdPerCoin: env.USD_PER_COIN,
-  });
-  if (denied) return fail(res, denied);
-
-  res.writeHead(200, {
-    "Content-Type": "text/event-stream",
-    "Cache-Control": "no-cache, no-transform",
-    Connection: "keep-alive",
-    "X-Accel-Buffering": "no",
-  });
-  res.flushHeaders();
-
-  const [costUsd, streamErr] = await attempt(streamChat(res, body, user.uid));
-  if (streamErr) return fail(res, streamErr);
-
-  const coins = Math.ceil(Number((costUsd / env.USD_PER_COIN).toFixed(6)));
-  const [receipt, deductErr] = await attempt(
-    deductCoins(user.uid, coins, env, randomUUID()),
-  );
-  if (deductErr) {
-    logger.error("deduction failed after successful chat", {
-      uid: user.uid,
-      coins,
-      costUsd,
+    const denied = checkLowCredit({
+      balance,
+      pricing,
+      messages: body.messages,
+      usdPerCoin: env.USD_PER_COIN,
     });
-    sse(res, { type: "done", charged: 0, balance });
-    res.end();
-    return;
-  }
+    if (denied) return fail(res, denied);
 
-  sse(res, { type: "done", charged: receipt.charged, balance: receipt.balance });
-  res.end();
-});
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    res.flushHeaders();
+
+    const [costUsd, streamErr] = await attempt(streamChat(res, body, user.uid));
+    if (streamErr) return fail(res, streamErr);
+
+    const coins = Math.ceil(Number((costUsd / env.USD_PER_COIN).toFixed(6)));
+    const [receipt, deductErr] = await attempt(
+      deductCoins(user.uid, coins, env, randomUUID()),
+    );
+    if (deductErr) {
+      logger.error("deduction failed after successful chat", {
+        uid: user.uid,
+        coins,
+        costUsd,
+      });
+      sse(res, { type: "done", charged: 0, balance });
+      res.end();
+      return;
+    }
+
+    sse(res, { type: "done", charged: receipt.charged, balance: receipt.balance });
+    res.end();
+  },
+);
