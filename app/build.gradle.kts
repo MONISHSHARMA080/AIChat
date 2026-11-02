@@ -37,7 +37,19 @@ android {
 	}
 
 	buildTypes {
+		debug {
+			buildConfigField(
+				"String",
+				"FUNCTIONS_BASE_URL",
+				"\"http://10.0.2.2:5001/aichat-8d4f3/us-central1/\"",
+			)
+		}
 		release {
+			buildConfigField(
+				"String",
+				"FUNCTIONS_BASE_URL",
+				"\"https://us-central1-aichat-8d4f3.cloudfunctions.net/\"",
+			)
 			optimization {
 				enable = false
 			}
@@ -83,7 +95,14 @@ dependencies {
 	implementation(libs.androidx.credentials)
 	implementation(libs.androidx.credentials.play.services)
 	implementation(libs.googleid)
+	implementation(libs.retrofit)
+	implementation(libs.retrofit.kotlinx.serialization.converter)
+	implementation(libs.okhttp)
+	implementation(libs.okhttp.logging.interceptor)
+	implementation(libs.kotlinx.serialization.json)
+	implementation(libs.kotlinx.coroutines.android)
 	testImplementation(libs.junit)
+	testImplementation(libs.kotlinx.coroutines.test)
 	androidTestImplementation(platform(libs.androidx.compose.bom))
 	androidTestImplementation(libs.androidx.compose.ui.test.junit4)
 	androidTestImplementation(libs.androidx.espresso.core)

@@ -4,16 +4,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.navigation3.runtime.NavBackStack
 import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
 import com.agentic.aichat.ui.chat.ChatScreen
-import com.agentic.aichat.ui.chat.ReasoningEffort
 import com.agentic.aichat.ui.chatlist.ChatListScreen
 import com.agentic.aichat.ui.onboarding.OnboardingScreen
 import com.agentic.aichat.ui.paywall.PaywallScreen
@@ -35,7 +32,7 @@ fun AppNavDisplay(
 	modifier: Modifier = Modifier,
 ) {
 //	val backStack = rememberAppBackStack(SignIn)
-	val backStack = rememberAppBackStack(Onboarding)
+	val backStack = rememberAppBackStack(ChatHome)
 
 	Surface(
 		modifier = modifier.fillMaxSize(),

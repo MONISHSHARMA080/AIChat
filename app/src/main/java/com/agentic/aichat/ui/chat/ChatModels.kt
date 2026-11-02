@@ -1,13 +1,6 @@
 package com.agentic.aichat.ui.chat
 
-import androidx.compose.runtime.Immutable
-
-@Immutable
-data class AiChatModel(
-	val id: String,
-	val name: String,
-	val description: String,
-)
+import com.agentic.aichat.model.AiChatModel
 
 enum class ReasoningEffort(
 	val label: String,
@@ -48,8 +41,3 @@ val AvailableModels: List<AiChatModel> = listOf(
 		description = "Deep reasoning for math and code.",
 	),
 )
-
-fun modelById(id: String): AiChatModel =
-	AvailableModels.firstOrNull { it.id == id }
-		?: AvailableModels.firstOrNull()
-		?: error("AvailableModels must not be empty")

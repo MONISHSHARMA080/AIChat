@@ -52,7 +52,9 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material3.Button
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.FilledTonalIconButton
@@ -100,10 +102,12 @@ import com.agentic.aichat.data.chat.db.entity.ChatEntity
 import com.agentic.aichat.data.chat.db.entity.MessageEntity
 import com.agentic.aichat.data.chat.db.entity.MessageRole
 import com.agentic.aichat.data.chat.db.entity.MessageStatus
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.agentic.aichat.model.AiChatModel
 import com.agentic.aichat.ui.theme.AIChatTheme
 import com.agentic.aichat.ui.theme.navIconButtonShapes
 import java.util.UUID
-import kotlin.collections.filter
 
 private const val PREVIEW_IMAGE_MESSAGE_ID = "preview-m3"
 
@@ -153,19 +157,40 @@ private fun statusLabel(status: MessageStatus): String = when (status) {
 }
 
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun ChatScreen(
 		chatId: String? = null,
 		modifier: Modifier = Modifier,
 		onOpenChatList: () -> Unit = {},
+		viewModel: ChatViewModel = hiltViewModel(),
+) {
+	val modelsState by viewModel.uiState.collectAsStateWithLifecycle()
+	ChatScreenContent(
+		modelsState = modelsState,
+		onRetry = viewModel::retry,
+		chatId = chatId,
+		modifier = modifier,
+		onOpenChatList = onOpenChatList,
+	)
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun ChatScreenContent(
+		modelsState: ChatUiState,
+		onRetry: () -> Unit,
+		chatId: String? = null,
+		modifier: Modifier = Modifier,
+		onOpenChatList: () -> Unit = {},
 ) {
 	val scheme = MaterialTheme.colorScheme
+	val models = (modelsState as? ChatUiState.Success)?.models.orEmpty()
 	val (chat, messages) = rememberPreviewChat()
 	var imageMessageIds by remember { mutableStateOf(setOf(PREVIEW_IMAGE_MESSAGE_ID)) }
 	var draft by remember { mutableStateOf("") }
 	var stagedImage by remember { mutableStateOf(false) }
-	var selectedModel by remember(chat.id, chat.modelId) { mutableStateOf(modelById(chat.modelId)) }
+	var selectedModelId by remember(chat.modelId) { mutableStateOf(chat.modelId) }
+	val selectedModel = models.firstOrNull { it.id == selectedModelId } ?: models.firstOrNull()
 	var selectedEffort by remember(chat.id) { mutableStateOf(ReasoningEffort.Medium) }
 	var showModelSheet by remember { mutableStateOf(false) }
 	val listState = rememberLazyListState()
@@ -269,78 +294,88 @@ fun ChatScreen(
 				}
 			}
 
-			ChatComposer(
-				draft = draft,
-				onDraftChange = { draft = it },
-				selectedModel = selectedModel,
-				onModelClick = { showModelSheet = true },
-				stagedImage = stagedImage,
-				onStageImage = { stagedImage = true },
-				onClearImage = { stagedImage = false },
-				onTextFieldBoundsInRoot = { composerBounds.textField = it },
-				onSend = {
-					val text = draft.trim()
-					if (text.isEmpty() && !stagedImage) return@ChatComposer
-					val id = UUID.randomUUID().toString()
-					val hasImage = stagedImage
-					if (hasImage) imageMessageIds += id
-					sendRevealBottomPx = imeBottomPx.toFloat()
+			if (selectedModel != null) {
+				ChatComposer(
+					draft = draft,
+					onDraftChange = { draft = it },
+					selectedModel = selectedModel,
+					onModelClick = { showModelSheet = true },
+					stagedImage = stagedImage,
+					onStageImage = { stagedImage = true },
+					onClearImage = { stagedImage = false },
+					onTextFieldBoundsInRoot = { composerBounds.textField = it },
+					onSend = {
+						val text = draft.trim()
+						if (text.isEmpty() && !stagedImage) return@ChatComposer
+						val id = UUID.randomUUID().toString()
+						val hasImage = stagedImage
+						if (hasImage) imageMessageIds += id
+						sendRevealBottomPx = imeBottomPx.toFloat()
 
-					haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+						haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
 
-					val durationScale = Settings.Global.getFloat(
-						context.contentResolver,
-						Settings.Global.ANIMATOR_DURATION_SCALE,
-						1f,
-					)
-
-					val padX = with(density) { 16.dp.toPx() }
-					val padY = with(density) { 12.dp.toPx() }
-					val textRect = composerBounds.textField?.let {
-						Rect(it.left - padX, it.top - padY, it.right + padX, it.bottom + padY)
-					}
-					val origin = if (hasImage || text.isBlank()) {
-						composerBounds.composer
-					} else {
-						textRect ?: composerBounds.composer
-					}
-
-					val sidePx = with(density) { LIST_SIDE_PADDING.toPx() }
-					val maxWidthPx = 0.85f * (containerSize.width - 2f * sidePx)
-
-					if (durationScale > 0f && origin != null && maxWidthPx > 0f) {
-						flights = flights + SendFlight(
-							id = id,
-							text = text,
-							withImage = hasImage,
-							origin = origin,
-							maxWidthPx = maxWidthPx,
+						val durationScale = Settings.Global.getFloat(
+							context.contentResolver,
+							Settings.Global.ANIMATOR_DURATION_SCALE,
+							1f,
 						)
-					}
-					messages.add(
-						MessageEntity(
-							id = id,
-							chatId = chat.id,
-							role = MessageRole.USER,
-							content = text,
-							createdAt = System.currentTimeMillis(),
-							status = MessageStatus.DONE,
-						),
-					)
-					draft = ""
-					stagedImage = false
-					scrollTick++
-				},
-				modifier = Modifier
-					.align(Alignment.BottomCenter)
-					.padding(start = 12.dp, end = 12.dp, bottom = 8.dp)
-					.imePadding()
-					.onGloballyPositioned {
-						composerBounds.composer = it.rectInRoot()
-						val contentHeightPx = (it.size.height - imeBottomPx).coerceAtLeast(0).toFloat()
-						if (contentHeightPx != composerHeightPx) composerHeightPx = contentHeightPx
+
+						val padX = with(density) { 16.dp.toPx() }
+						val padY = with(density) { 12.dp.toPx() }
+						val textRect = composerBounds.textField?.let {
+							Rect(it.left - padX, it.top - padY, it.right + padX, it.bottom + padY)
+						}
+						val origin = if (hasImage || text.isBlank()) {
+							composerBounds.composer
+						} else {
+							textRect ?: composerBounds.composer
+						}
+
+						val sidePx = with(density) { LIST_SIDE_PADDING.toPx() }
+						val maxWidthPx = 0.85f * (containerSize.width - 2f * sidePx)
+
+						if (durationScale > 0f && origin != null && maxWidthPx > 0f) {
+							flights = flights + SendFlight(
+								id = id,
+								text = text,
+								withImage = hasImage,
+								origin = origin,
+								maxWidthPx = maxWidthPx,
+							)
+						}
+						messages.add(
+							MessageEntity(
+								id = id,
+								chatId = chat.id,
+								role = MessageRole.USER,
+								content = text,
+								createdAt = System.currentTimeMillis(),
+								status = MessageStatus.DONE,
+							),
+						)
+						draft = ""
+						stagedImage = false
+						scrollTick++
 					},
-			)
+					modifier = Modifier
+						.align(Alignment.BottomCenter)
+						.padding(start = 12.dp, end = 12.dp, bottom = 8.dp)
+						.imePadding()
+						.onGloballyPositioned {
+							composerBounds.composer = it.rectInRoot()
+							val contentHeightPx = (it.size.height - imeBottomPx).coerceAtLeast(0).toFloat()
+							if (contentHeightPx != composerHeightPx) composerHeightPx = contentHeightPx
+						},
+				)
+			} else if (modelsState !is ChatUiState.Success) {
+				ModelsStatePanel(
+					state = modelsState,
+					onRetry = onRetry,
+					modifier = Modifier
+						.align(Alignment.BottomCenter)
+						.padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
+				)
+			}
 
 			flights.forEach { flight ->
 				key(flight.id) {
@@ -356,17 +391,69 @@ fun ChatScreen(
 				}
 			}
 
-			if (showModelSheet) {
+			if (showModelSheet && selectedModel != null) {
 				ModelPickerSheet(
 					selectedModel = selectedModel,
 					selectedEffort = selectedEffort,
 					onModelSelected = {
-						selectedModel = it
+						selectedModelId = it.id
 						showModelSheet = false
 					},
 					onEffortSelected = { selectedEffort = it },
 					onDismiss = { showModelSheet = false },
+					models = models,
 				)
+			}
+		}
+	}
+}
+
+@Composable
+private fun ModelsStatePanel(
+	state: ChatUiState,
+	onRetry: () -> Unit,
+	modifier: Modifier = Modifier,
+) {
+	Surface(
+		shape = RoundedCornerShape(24.dp),
+		color = MaterialTheme.colorScheme.surfaceContainerHigh,
+		contentColor = MaterialTheme.colorScheme.onSurface,
+		modifier = modifier.fillMaxWidth(),
+	) {
+		Column(
+			horizontalAlignment = Alignment.CenterHorizontally,
+			modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
+		) {
+			when (state) {
+				ChatUiState.Loading -> {
+					CircularProgressIndicator()
+					Spacer(modifier = Modifier.height(8.dp))
+					Text(
+						text = "Loading models",
+						style = MaterialTheme.typography.bodyMedium,
+					)
+				}
+				ChatUiState.Empty -> {
+					Text(
+						text = "No models available",
+						style = MaterialTheme.typography.bodyMedium,
+					)
+					Spacer(modifier = Modifier.height(8.dp))
+					Button(onClick = onRetry) {
+						Text(text = "Retry")
+					}
+				}
+				is ChatUiState.Error -> {
+					Text(
+						text = state.message,
+						style = MaterialTheme.typography.bodyMedium,
+					)
+					Spacer(modifier = Modifier.height(8.dp))
+					Button(onClick = onRetry) {
+						Text(text = "Retry")
+					}
+				}
+				is ChatUiState.Success -> Unit
 			}
 		}
 	}
@@ -771,11 +858,24 @@ private fun ModelSelectorChip(
 	}
 }
 
+private val previewModelsState = ChatUiState.Success(
+	listOf(
+		AiChatModel(
+			id = "spark-1",
+			name = "Spark 1",
+			description = "Flagship model for everyday chats.",
+		),
+	),
+)
+
 @Preview(name = "Chat light", showBackground = true)
 @Composable
 private fun ChatScreenPreviewLight() {
 	AIChatTheme(darkTheme = false) {
-		ChatScreen()
+		ChatScreenContent(
+			modelsState = previewModelsState,
+			onRetry = {},
+		)
 	}
 }
 
@@ -787,6 +887,9 @@ private fun ChatScreenPreviewLight() {
 @Composable
 private fun ChatScreenPreviewDark() {
 	AIChatTheme(darkTheme = true) {
-		ChatScreen()
+		ChatScreenContent(
+			modelsState = previewModelsState,
+			onRetry = {},
+		)
 	}
 }

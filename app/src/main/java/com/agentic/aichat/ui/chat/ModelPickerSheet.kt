@@ -14,8 +14,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -46,6 +49,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
+import com.agentic.aichat.model.AiChatModel
 
 private enum class PickerScreen {
 	Models,
@@ -61,7 +65,7 @@ fun ModelPickerSheet(
 	onEffortSelected: (ReasoningEffort) -> Unit,
 	onDismiss: () -> Unit,
 	modifier: Modifier = Modifier,
-	models: List<AiChatModel> = AvailableModels,
+	models: List<AiChatModel>,
 ) {
 	val scheme = MaterialTheme.colorScheme
 	var screen by remember { mutableStateOf(PickerScreen.Models) }
@@ -139,12 +143,17 @@ private fun ModelsScreen(
 			modifier = Modifier.padding(horizontal = 8.dp),
 		)
 		SectionLabel(text = "Model")
-		models.forEach { model ->
-			ModelRow(
-				model = model,
-				selected = model.id == selectedModel.id,
-				onClick = { onModelSelected(model) },
-			)
+		LazyColumn(
+			modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp),
+			verticalArrangement = Arrangement.spacedBy(8.dp),
+		) {
+			items(models, key = { it.id }) { model ->
+				ModelRow(
+					model = model,
+					selected = model.id == selectedModel.id,
+					onClick = { onModelSelected(model) },
+				)
+			}
 		}
 		Spacer(modifier = Modifier.height(8.dp))
 		SectionLabel(text = "Reasoning")
