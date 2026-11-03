@@ -49,7 +49,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
-import com.agentic.aichat.data.ai.AiChatModel
+import com.agentic.aichat.data.ai.ModelDto
 
 private enum class PickerScreen {
 	Models,
@@ -59,13 +59,13 @@ private enum class PickerScreen {
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun ModelPickerSheet(
-	selectedModel: AiChatModel,
-	selectedEffort: ReasoningEffort,
-	onModelSelected: (AiChatModel) -> Unit,
-	onEffortSelected: (ReasoningEffort) -> Unit,
+	selectedModel: ModelDto,
+	selectedLevel: String,
+	onModelSelected: (ModelDto) -> Unit,
+	onLevelSelected: (String) -> Unit,
 	onDismiss: () -> Unit,
 	modifier: Modifier = Modifier,
-	models: List<AiChatModel>,
+	models: List<ModelDto>,
 ) {
 	val scheme = MaterialTheme.colorScheme
 	var screen by remember { mutableStateOf(PickerScreen.Models) }
@@ -90,7 +90,7 @@ fun ModelPickerSheet(
 				PickerScreen.Models -> ModelsScreen(
 					models = models,
 					selectedModel = selectedModel,
-					selectedEffort = selectedEffort,
+					selectedLevel = selectedLevel,
 					onModelSelected = { model ->
 						scope.launch {
 							sheetState.hide()
@@ -100,8 +100,9 @@ fun ModelPickerSheet(
 					onOpenEffort = { screen = PickerScreen.Effort },
 				)
 				PickerScreen.Effort -> EffortScreen(
-					selectedEffort = selectedEffort,
-					onEffortSelected = onEffortSelected,
+					levels = selectedModel.reasoning.levels,
+					selectedLevel = selectedLevel,
+					onLevelSelected = onLevelSelected,
 					onBack = { screen = PickerScreen.Models },
 				)
 			}
@@ -127,10 +128,10 @@ private fun SheetScreenColumn(
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun ModelsScreen(
-	models: List<AiChatModel>,
-	selectedModel: AiChatModel,
-	selectedEffort: ReasoningEffort,
-	onModelSelected: (AiChatModel) -> Unit,
+	models: List<ModelDto>,
+	selectedModel: ModelDto,
+	selectedLevel: String,
+	onModelSelected: (ModelDto) -> Unit,
 	onOpenEffort: () -> Unit,
 	modifier: Modifier = Modifier,
 ) {
@@ -155,19 +156,21 @@ private fun ModelsScreen(
 				)
 			}
 		}
-		Spacer(modifier = Modifier.height(8.dp))
-		SectionLabel(text = "Reasoning")
-		EffortRow(
-			selectedEffort = selectedEffort,
-			onClick = onOpenEffort,
-		)
+		if (selectedModel.reasoning.levels.isNotEmpty()) {
+			Spacer(modifier = Modifier.height(8.dp))
+			SectionLabel(text = "Reasoning")
+			EffortRow(
+				level = selectedLevel,
+				onClick = onOpenEffort,
+			)
+		}
 	}
 }
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun ModelRow(
-	model: AiChatModel,
+	model: ModelDto,
 	selected: Boolean,
 	onClick: () -> Unit,
 	modifier: Modifier = Modifier,
@@ -192,7 +195,7 @@ private fun ModelRow(
 					style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
 				)
 				Text(
-					text = model.description,
+					text = model.description.orEmpty(),
 					style = MaterialTheme.typography.bodySmall,
 					color = content.copy(alpha = 0.75f),
 				)
@@ -222,7 +225,7 @@ private fun EffortPill(content: @Composable () -> Unit) {
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun EffortRow(
-	selectedEffort: ReasoningEffort,
+	level: String,
 	onClick: () -> Unit,
 	modifier: Modifier = Modifier,
 ) {
@@ -244,23 +247,25 @@ private fun EffortRow(
 					style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
 				)
 				AnimatedContent(
-					targetState = selectedEffort,
+					targetState = level,
 					label = "effort-description",
-				) { effort ->
-					Text(
-						text = effort.description,
-						style = MaterialTheme.typography.bodySmall,
-						color = scheme.onSecondaryContainer.copy(alpha = 0.75f),
-					)
+				) { current ->
+					reasoningEffortFor(current)?.description?.let {
+						Text(
+							text = it,
+							style = MaterialTheme.typography.bodySmall,
+							color = scheme.onSecondaryContainer.copy(alpha = 0.75f),
+						)
+					}
 				}
 			}
 			EffortPill {
 				AnimatedContent(
-					targetState = selectedEffort,
+					targetState = level,
 					label = "effort-label",
-				) { effort ->
+				) { current ->
 					Text(
-						text = effort.label,
+						text = reasoningEffortFor(current)?.label ?: current,
 						style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
 						modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
 					)
@@ -293,14 +298,16 @@ private fun SectionLabel(
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun EffortScreen(
-	selectedEffort: ReasoningEffort,
-	onEffortSelected: (ReasoningEffort) -> Unit,
+	levels: List<String>,
+	selectedLevel: String,
+	onLevelSelected: (String) -> Unit,
 	onBack: () -> Unit,
 	modifier: Modifier = Modifier,
 ) {
 	val scheme = MaterialTheme.colorScheme
 	val motion = MaterialTheme.motionScheme
-	val levels = ReasoningEffort.entries
+	if (levels.isEmpty()) return
+	val selectedIndex = levels.indexOf(selectedLevel).coerceAtLeast(0)
 	SheetScreenColumn(modifier = modifier) {
 		Row(verticalAlignment = Alignment.CenterVertically) {
 			IconButton(onClick = onBack) {
@@ -323,7 +330,7 @@ private fun EffortScreen(
 		) {
 			Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 20.dp)) {
 				AnimatedContent(
-					targetState = selectedEffort,
+					targetState = selectedLevel,
 					transitionSpec = {
 						(fadeIn(animationSpec = motion.defaultEffectsSpec()) +
 							scaleIn(
@@ -338,34 +345,36 @@ private fun EffortScreen(
 							SizeTransform(clip = false) { _, _ -> motion.defaultSpatialSpec() }
 					},
 					label = "effort-hero",
-				) { effort ->
+				) { current ->
 					Column {
 						Text(
-							text = effort.label,
+							text = reasoningEffortFor(current)?.label ?: current,
 							style = MaterialTheme.typography.displaySmall.copy(fontWeight = FontWeight.Bold),
 							color = scheme.primary,
 						)
-						Text(
-							text = effort.description,
-							style = MaterialTheme.typography.bodyMedium,
-							color = scheme.onSurfaceVariant,
-						)
+						reasoningEffortFor(current)?.description?.let {
+							Text(
+								text = it,
+								style = MaterialTheme.typography.bodyMedium,
+								color = scheme.onSurfaceVariant,
+							)
+						}
 					}
 				}
 				Spacer(modifier = Modifier.height(16.dp))
 				val sliderState = rememberSliderState(
-					value = levels.indexOf(selectedEffort).toFloat(),
-					steps = levels.size - 2,
+					value = selectedIndex.toFloat(),
+					steps = (levels.size - 2).coerceAtLeast(0),
 					trackRange = 0f..(levels.size - 1).toFloat(),
 				)
-				LaunchedEffect(selectedEffort) {
-					sliderState.value = levels.indexOf(selectedEffort).toFloat()
+				LaunchedEffect(selectedLevel, levels) {
+					sliderState.value = levels.indexOf(selectedLevel).coerceAtLeast(0).toFloat()
 				}
 				Slider(
 					state = sliderState,
 					onValueChange = { raw ->
 						sliderState.value = raw
-						onEffortSelected(levels[raw.roundToInt().coerceIn(levels.indices)])
+						onLevelSelected(levels[raw.roundToInt().coerceIn(levels.indices)])
 					},
 				)
 				Row(
@@ -374,15 +383,15 @@ private fun EffortScreen(
 				) {
 					levels.forEach { level ->
 						Text(
-							text = level.label,
+							text = reasoningEffortFor(level)?.label ?: level,
 							style = MaterialTheme.typography.labelMedium.copy(
-								fontWeight = if (level == selectedEffort) {
+								fontWeight = if (level == selectedLevel) {
 									FontWeight.Bold
 								} else {
 									FontWeight.Normal
 								},
 							),
-							color = if (level == selectedEffort) {
+							color = if (level == selectedLevel) {
 								scheme.primary
 							} else {
 								scheme.onSurfaceVariant

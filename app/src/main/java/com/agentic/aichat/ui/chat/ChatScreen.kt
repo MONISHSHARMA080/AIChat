@@ -104,7 +104,8 @@ import com.agentic.aichat.data.chat.db.entity.MessageRole
 import com.agentic.aichat.data.chat.db.entity.MessageStatus
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.agentic.aichat.data.ai.AiChatModel
+import com.agentic.aichat.data.ai.ModelDto
+import com.agentic.aichat.data.ai.ReasoningDto
 import com.agentic.aichat.ui.theme.AIChatTheme
 import com.agentic.aichat.ui.theme.navIconButtonShapes
 import java.util.UUID
@@ -177,10 +178,10 @@ fun ChatScreen(
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun ChatScreenContent(
+		modifier: Modifier = Modifier,
 		modelsState: ChatUiState,
 		onRetry: () -> Unit,
 		chatId: String? = null,
-		modifier: Modifier = Modifier,
 		onOpenChatList: () -> Unit = {},
 ) {
 	val scheme = MaterialTheme.colorScheme
@@ -191,7 +192,11 @@ private fun ChatScreenContent(
 	var stagedImage by remember { mutableStateOf(false) }
 	var selectedModelId by remember(chat.modelId) { mutableStateOf(chat.modelId) }
 	val selectedModel = models.firstOrNull { it.id == selectedModelId } ?: models.firstOrNull()
-	var selectedEffort by remember(chat.id) { mutableStateOf(ReasoningEffort.Medium) }
+	val levels = selectedModel?.reasoning.levels.orEmpty()
+	var selectedLevel by remember(chat.id, selectedModel?.id) {
+		mutableStateOf(levels.firstOrNull { it.equals("medium", ignoreCase = true) } ?: levels.firstOrNull().orEmpty())
+	}
+	val safeLevel = selectedLevel.takeIf { it in levels } ?: levels.firstOrNull().orEmpty()
 	var showModelSheet by remember { mutableStateOf(false) }
 	val listState = rememberLazyListState()
 	val context = LocalContext.current
@@ -299,6 +304,7 @@ private fun ChatScreenContent(
 					draft = draft,
 					onDraftChange = { draft = it },
 					selectedModel = selectedModel,
+					effortLabel = reasoningEffortFor(safeLevel)?.label ?: safeLevel,
 					onModelClick = { showModelSheet = true },
 					stagedImage = stagedImage,
 					onStageImage = { stagedImage = true },
@@ -394,12 +400,12 @@ private fun ChatScreenContent(
 			if (showModelSheet && selectedModel != null) {
 				ModelPickerSheet(
 					selectedModel = selectedModel,
-					selectedEffort = selectedEffort,
+					selectedLevel = safeLevel,
 					onModelSelected = {
 						selectedModelId = it.id
 						showModelSheet = false
 					},
-					onEffortSelected = { selectedEffort = it },
+					onLevelSelected = { selectedLevel = it },
 					onDismiss = { showModelSheet = false },
 					models = models,
 				)
@@ -649,7 +655,8 @@ internal fun ImagePlaceholder(modifier: Modifier = Modifier) {
 private fun ChatComposer(
 		draft: String,
 		onDraftChange: (String) -> Unit,
-		selectedModel: AiChatModel,
+		selectedModel: ModelDto,
+		effortLabel: String,
 		onModelClick: () -> Unit,
 		stagedImage: Boolean,
 		onStageImage: () -> Unit,
@@ -818,6 +825,7 @@ private fun ChatComposer(
 				) {
 					ModelSelectorChip(
 						model = selectedModel,
+						effortLabel = effortLabel,
 						onClick = onModelClick,
 					)
 				}
@@ -829,7 +837,8 @@ private fun ChatComposer(
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun ModelSelectorChip(
-		model: AiChatModel,
+		model: ModelDto,
+		effortLabel: String,
 		onClick: () -> Unit,
 		modifier: Modifier = Modifier,
 ) {
@@ -846,7 +855,7 @@ private fun ModelSelectorChip(
 			modifier = Modifier.padding(start = 12.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
 		) {
 			Text(
-				text = model.name,
+				text = if (effortLabel.isEmpty()) model.name else "${model.name} • $effortLabel",
 				style = MaterialTheme.typography.labelLarge,
 			)
 			Icon(
@@ -860,10 +869,11 @@ private fun ModelSelectorChip(
 
 private val previewModelsState = ChatUiState.Success(
 	listOf(
-		AiChatModel(
+		ModelDto(
 			id = "spark-1",
 			name = "Spark 1",
 			description = "Flagship model for everyday chats.",
+			reasoning = ReasoningDto(levels = listOf("Less", "Medium", "Hard", "Ultra")),
 		),
 	),
 )
