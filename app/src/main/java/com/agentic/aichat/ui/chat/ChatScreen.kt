@@ -185,7 +185,7 @@ private fun ChatScreenContent(
 		onOpenChatList: () -> Unit = {},
 ) {
 	val scheme = MaterialTheme.colorScheme
-	val models = (modelsState as? ChatUiState.Success)?.models.orEmpty()
+	val models = modelsState.models
 	val (chat, messages) = rememberPreviewChat()
 	var imageMessageIds by remember { mutableStateOf(setOf(PREVIEW_IMAGE_MESSAGE_ID)) }
 	var draft by remember { mutableStateOf("") }
@@ -382,7 +382,7 @@ private fun ChatScreenContent(
 							if (contentHeightPx != composerHeightPx) composerHeightPx = contentHeightPx
 						},
 				)
-			} else if (modelsState !is ChatUiState.Success) {
+			} else if (models.isEmpty()) {
 				ModelsStatePanel(
 					state = modelsState,
 					onRetry = onRetry,
@@ -439,8 +439,8 @@ private fun ModelsStatePanel(
 			horizontalAlignment = Alignment.CenterHorizontally,
 			modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
 		) {
-			when (state) {
-				ChatUiState.Loading -> {
+			when {
+				state.isLoading -> {
 					CircularProgressIndicator()
 					Spacer(modifier = Modifier.height(8.dp))
 					Text(
@@ -448,7 +448,17 @@ private fun ModelsStatePanel(
 						style = MaterialTheme.typography.bodyMedium,
 					)
 				}
-				ChatUiState.Empty -> {
+				state.errorMessage != null -> {
+					Text(
+						text = state.errorMessage,
+						style = MaterialTheme.typography.bodyMedium,
+					)
+					Spacer(modifier = Modifier.height(8.dp))
+					Button(onClick = onRetry) {
+						Text(text = "Retry")
+					}
+				}
+				else -> {
 					Text(
 						text = "No models available",
 						style = MaterialTheme.typography.bodyMedium,
@@ -458,17 +468,6 @@ private fun ModelsStatePanel(
 						Text(text = "Retry")
 					}
 				}
-				is ChatUiState.Error -> {
-					Text(
-						text = state.message,
-						style = MaterialTheme.typography.bodyMedium,
-					)
-					Spacer(modifier = Modifier.height(8.dp))
-					Button(onClick = onRetry) {
-						Text(text = "Retry")
-					}
-				}
-				is ChatUiState.Success -> Unit
 			}
 		}
 	}
@@ -882,8 +881,8 @@ private fun ModelSelectorChip(
 	}
 }
 
-private val previewModelsState = ChatUiState.Success(
-	listOf(
+private val previewModelsState = ChatUiState(
+	models = listOf(
 		ModelDto(
 			id = "spark-1",
 			name = "Spark 1",

@@ -10,44 +10,47 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 @HiltViewModel
 class ChatViewModel @Inject constructor(
 	private val modelsRepository: ModelsRepository,
 ) : ViewModel() {
-	private val _uiState = MutableStateFlow<ChatUiState>(ChatUiState.Loading)
+	private val _uiState = MutableStateFlow(ChatUiState(isLoading = true))
 	val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
-	private var loadJob: Job? = null
+	private var refreshJob: Job? = null
 
 	init {
-		loadModels()
-	}
-
-	fun loadModels() {
-		log("loadign the models")
-		loadJob?.cancel()
-		_uiState.value = ChatUiState.Loading
-		loadJob = viewModelScope.launch {
-			modelsRepository.getModels()
-				.onSuccess { models ->
-					log("got the result and it is $models")
-					_uiState.value = if (models.isEmpty()) {
-						ChatUiState.Empty
-					} else {
-						ChatUiState.Success(models)
-					}
-				}
-				.onFailure { res->
-					log("got the error and it is $res")
-					_uiState.value = ChatUiState.Error(
-						"Could not load models. Please try again.",
-					)
-				}
+		viewModelScope.launch {
+			modelsRepository.observeModels().collect { models ->
+				_uiState.update { it.copy(models = models) }
+			}
 		}
+		refresh()
 	}
 
 	fun retry() {
-		loadModels()
+		refresh()
+	}
+
+	private fun refresh() {
+		refreshJob?.cancel()
+		_uiState.update { it.copy(isLoading = true, errorMessage = null) }
+		refreshJob = viewModelScope.launch {
+			modelsRepository.refreshModels()
+				.onSuccess {
+					_uiState.update { it.copy(isLoading = false) }
+				}
+				.onFailure { res ->
+					log("got the error and it is $res")
+					_uiState.update {
+						it.copy(
+							isLoading = false,
+							errorMessage = "Could not load models. Please try again.",
+						)
+					}
+				}
+		}
 	}
 }

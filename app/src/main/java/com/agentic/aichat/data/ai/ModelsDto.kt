@@ -1,5 +1,7 @@
 package com.agentic.aichat.data.ai
 
+import androidx.room3.Entity
+import androidx.room3.PrimaryKey
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -8,8 +10,9 @@ data class ListModelsResponseDto(
 )
 
 @Serializable
+@Entity(tableName = "models")
 data class ModelDto(
-	val id: String,
+	@PrimaryKey val id: String,
 	val name: String,
 	val description: String? = null,
 	val pricing: PricingDto? = null,
