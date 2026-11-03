@@ -20,4 +20,10 @@ class ModelsRepositoryImpl @Inject constructor(
 	} catch (e: Exception) {
 		Result.failure(e)
 	}
+
+	private fun ModelDto.toModel(): AiChatModel = AiChatModel(
+		id = id,
+		name = name,
+		description = description.orEmpty(),
+	)
 }
