@@ -14,6 +14,8 @@ data class ModelDto(
 	val description: String? = null,
 	val pricing: PricingDto? = null,
 	val reasoning: ReasoningDto = ReasoningDto(),
+	val provider: String = "",
+	val logoUrl: String? = null,
 )
 
 @Serializable

@@ -863,6 +863,12 @@ private fun ModelSelectorChip(
 			verticalAlignment = Alignment.CenterVertically,
 			modifier = Modifier.padding(start = 12.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
 		) {
+			ProviderLogo(
+				logoUrl = model.logoUrl,
+				provider = model.provider,
+				size = 20.dp,
+				modifier = Modifier.padding(end = 6.dp),
+			)
 			Text(
 				text = if (effortLabel.isEmpty()) model.name else "${model.name} • $effortLabel",
 				style = MaterialTheme.typography.labelLarge,

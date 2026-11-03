@@ -2,7 +2,7 @@ import { logger } from "firebase-functions";
 import { onRequest } from "firebase-functions/v2/https";
 import { createGateway } from "ai";
 import { z } from "zod";
-import { AI_GATEWAY_API_KEY } from "../config";
+import { AI_GATEWAY_API_KEY, LOGO_BASE_URL } from "../config";
 
 const CATALOG_URL = "https://ai-gateway.vercel.sh/v1/models";
 
@@ -30,6 +30,8 @@ export type ModelInfo = {
   description: string | null;
   pricing: Pricing | null;
   reasoning: Reasoning;
+  provider: string;
+  logoUrl: string | null;
 };
 
 async function fetchReasoning(): Promise<Map<string, Reasoning>> {
@@ -61,11 +63,15 @@ export async function fetchModels(): Promise<ModelInfo[]> {
     fetchReasoning(),
   ]);
 
+  const configured = LOGO_BASE_URL.value();
+  const base = configured.endsWith("/") ? configured.slice(0, -1) : configured;
+
   return sdk.models
     .filter((m) => (m.modelType ?? "language") === "language")
     .map((m) => {
       const input = Number(m.pricing?.input);
       const output = Number(m.pricing?.output);
+      const provider = m.id.split("/")[0] ?? "other";
       return {
         id: m.id,
         name: m.name,
@@ -73,6 +79,8 @@ export async function fetchModels(): Promise<ModelInfo[]> {
         pricing:
           Number.isFinite(input) && Number.isFinite(output) ? { input, output } : null,
         reasoning: reasoning.get(m.id) ?? { levels: [], toggle: false, budgetTokens: false },
+        provider,
+        logoUrl: base ? `${base}/logos/${provider.toLowerCase()}.svg` : null,
       };
     });
 }

@@ -189,6 +189,11 @@ private fun ModelRow(
 			verticalAlignment = Alignment.CenterVertically,
 			modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
 		) {
+			ProviderLogo(
+				logoUrl = model.logoUrl,
+				provider = model.provider,
+				modifier = Modifier.padding(end = 12.dp),
+			)
 			Column(modifier = Modifier.weight(1f)) {
 				Text(
 					text = model.name,
