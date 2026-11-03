@@ -49,7 +49,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
-import com.agentic.aichat.model.AiChatModel
+import com.agentic.aichat.data.ai.AiChatModel
 
 private enum class PickerScreen {
 	Models,

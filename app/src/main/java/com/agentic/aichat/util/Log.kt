@@ -1,4 +1,4 @@
-package com.agentic.aichat
+package com.agentic.aichat.util
 
 import android.util.Log
 

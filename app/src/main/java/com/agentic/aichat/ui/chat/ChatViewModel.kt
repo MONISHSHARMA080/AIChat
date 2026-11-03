@@ -3,7 +3,7 @@ package com.agentic.aichat.ui.chat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.agentic.aichat.data.ai.ModelsRepository
-import com.agentic.aichat.log
+import com.agentic.aichat.util.log
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.Job

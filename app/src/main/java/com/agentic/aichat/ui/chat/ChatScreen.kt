@@ -104,7 +104,7 @@ import com.agentic.aichat.data.chat.db.entity.MessageRole
 import com.agentic.aichat.data.chat.db.entity.MessageStatus
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.agentic.aichat.model.AiChatModel
+import com.agentic.aichat.data.ai.AiChatModel
 import com.agentic.aichat.ui.theme.AIChatTheme
 import com.agentic.aichat.ui.theme.navIconButtonShapes
 import java.util.UUID

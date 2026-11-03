@@ -1,4 +1,4 @@
-package com.agentic.aichat.model
+package com.agentic.aichat.data.ai
 
 data class AiChatModel(
 	val id: String,

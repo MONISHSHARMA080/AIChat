@@ -1,7 +1,6 @@
 package com.agentic.aichat.data.ai
 
-import com.agentic.aichat.log
-import com.agentic.aichat.model.AiChatModel
+import com.agentic.aichat.util.log
 import javax.inject.Inject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
