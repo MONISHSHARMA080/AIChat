@@ -194,11 +194,6 @@ private fun ModelRow(
 					text = model.name,
 					style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
 				)
-				Text(
-					text = model.description.orEmpty(),
-					style = MaterialTheme.typography.bodySmall,
-					color = content.copy(alpha = 0.75f),
-				)
 			}
 			if (selected) {
 				Icon(
@@ -246,18 +241,6 @@ private fun EffortRow(
 					text = "Reasoning effort",
 					style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
 				)
-				AnimatedContent(
-					targetState = level,
-					label = "effort-description",
-				) { current ->
-					reasoningEffortFor(current)?.description?.let {
-						Text(
-							text = it,
-							style = MaterialTheme.typography.bodySmall,
-							color = scheme.onSecondaryContainer.copy(alpha = 0.75f),
-						)
-					}
-				}
 			}
 			EffortPill {
 				AnimatedContent(
@@ -265,7 +248,7 @@ private fun EffortRow(
 					label = "effort-label",
 				) { current ->
 					Text(
-						text = reasoningEffortFor(current)?.label ?: current,
+						text = current,
 						style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold),
 						modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
 					)
@@ -346,20 +329,11 @@ private fun EffortScreen(
 					},
 					label = "effort-hero",
 				) { current ->
-					Column {
-						Text(
-							text = reasoningEffortFor(current)?.label ?: current,
-							style = MaterialTheme.typography.displaySmall.copy(fontWeight = FontWeight.Bold),
-							color = scheme.primary,
-						)
-						reasoningEffortFor(current)?.description?.let {
-							Text(
-								text = it,
-								style = MaterialTheme.typography.bodyMedium,
-								color = scheme.onSurfaceVariant,
-							)
-						}
-					}
+					Text(
+						text = current,
+						style = MaterialTheme.typography.displaySmall.copy(fontWeight = FontWeight.Bold),
+						color = scheme.primary,
+					)
 				}
 				Spacer(modifier = Modifier.height(16.dp))
 				val sliderState = rememberSliderState(
@@ -383,7 +357,7 @@ private fun EffortScreen(
 				) {
 					levels.forEach { level ->
 						Text(
-							text = reasoningEffortFor(level)?.label ?: level,
+							text = level,
 							style = MaterialTheme.typography.labelMedium.copy(
 								fontWeight = if (level == selectedLevel) {
 									FontWeight.Bold

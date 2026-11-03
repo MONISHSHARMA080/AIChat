@@ -54,7 +54,7 @@ fun AppNavDisplay(
 						backStack.add(ChatHome)
 					},
 					onSkip = {
-//						OnboardingPrefs.save(context, "spark-1", ReasoningEffort.Medium.name, "everyday")
+//						OnboardingPrefs.save(context, "spark-1", "Medium", "everyday")
 						backStack.clear()
 						backStack.add(ChatHome)
 					},

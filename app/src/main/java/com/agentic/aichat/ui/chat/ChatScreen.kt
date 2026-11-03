@@ -192,11 +192,16 @@ private fun ChatScreenContent(
 	var stagedImage by remember { mutableStateOf(false) }
 	var selectedModelId by remember(chat.modelId) { mutableStateOf(chat.modelId) }
 	val selectedModel = models.firstOrNull { it.id == selectedModelId } ?: models.firstOrNull()
-	val levels = selectedModel?.reasoning.levels.orEmpty()
+	val supportsReasoning = selectedModel?.reasoning?.levels?.isNotEmpty() == true
+	val levels = if (supportsReasoning) selectedModel.reasoning.levels else emptyList()
 	var selectedLevel by remember(chat.id, selectedModel?.id) {
 		mutableStateOf(levels.firstOrNull { it.equals("medium", ignoreCase = true) } ?: levels.firstOrNull().orEmpty())
 	}
-	val safeLevel = selectedLevel.takeIf { it in levels } ?: levels.firstOrNull().orEmpty()
+	val safeLevel = if (supportsReasoning) {
+		selectedLevel.takeIf { it in levels } ?: levels.firstOrNull().orEmpty()
+	} else {
+		""
+	}
 	var showModelSheet by remember { mutableStateOf(false) }
 	val listState = rememberLazyListState()
 	val context = LocalContext.current
@@ -304,7 +309,11 @@ private fun ChatScreenContent(
 					draft = draft,
 					onDraftChange = { draft = it },
 					selectedModel = selectedModel,
-					effortLabel = reasoningEffortFor(safeLevel)?.label ?: safeLevel,
+					effortLabel = if (supportsReasoning && safeLevel.isNotEmpty()) {
+						safeLevel
+					} else {
+						""
+					},
 					onModelClick = { showModelSheet = true },
 					stagedImage = stagedImage,
 					onStageImage = { stagedImage = true },

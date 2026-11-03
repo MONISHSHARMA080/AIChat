@@ -1,14 +1,13 @@
 package com.agentic.aichat.ui.onboarding
 
 import androidx.lifecycle.ViewModel
-import com.agentic.aichat.ui.chat.ReasoningEffort
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 data class OnboardingResult(
     val modelId: String,
-    val effort: ReasoningEffort,
+    val effort: String,
     val goal: String,
 )
 
@@ -19,8 +18,8 @@ class OnboardingViewModel : ViewModel() {
     private val _goal = MutableStateFlow("")
     val goal: StateFlow<String> = _goal.asStateFlow()
 
-    private val _effort = MutableStateFlow(ReasoningEffort.Medium)
-    val effort: StateFlow<ReasoningEffort> = _effort.asStateFlow()
+    private val _effort = MutableStateFlow("Medium")
+    val effort: StateFlow<String> = _effort.asStateFlow()
 
     private val _modelId = MutableStateFlow("spark-1")
     val modelId: StateFlow<String> = _modelId.asStateFlow()
@@ -31,7 +30,7 @@ class OnboardingViewModel : ViewModel() {
         _goal.value = goal
     }
 
-    fun selectEffort(effort: ReasoningEffort) {
+    fun selectEffort(effort: String) {
         _effort.value = effort
     }
 
