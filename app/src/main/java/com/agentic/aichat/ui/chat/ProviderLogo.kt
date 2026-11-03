@@ -7,6 +7,10 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -22,6 +26,7 @@ fun ProviderLogo(
 	modifier: Modifier = Modifier,
 	size: Dp = 28.dp,
 ) {
+	var loaded by remember(logoUrl) { mutableStateOf(false) }
 	Box(
 		contentAlignment = Alignment.Center,
 		modifier = modifier.size(size),
@@ -32,18 +37,25 @@ fun ProviderLogo(
 				.clip(CircleShape)
 				.background(MaterialTheme.colorScheme.surfaceContainerHighest),
 		) {
-			Text(
-				text = provider.firstOrNull()?.uppercase() ?: "?",
-				style = MaterialTheme.typography.labelLarge,
-				color = MaterialTheme.colorScheme.onSurfaceVariant,
-			)
+			if (!loaded) {
+				Text(
+					text = provider.firstOrNull()?.uppercase() ?: "?",
+					style = MaterialTheme.typography.labelLarge,
+					color = MaterialTheme.colorScheme.onSurfaceVariant,
+				)
+			}
 		}
 		if (logoUrl != null) {
 			AsyncImage(
 				model = logoUrl,
 				contentDescription = "$provider logo",
 				contentScale = ContentScale.Fit,
-				modifier = Modifier.matchParentSize().clip(CircleShape),
+				onLoading = { loaded = false },
+				onSuccess = { loaded = true },
+				onError = { loaded = false },
+				modifier = Modifier.matchParentSize()
+					.clip(CircleShape)
+					.background(MaterialTheme.colorScheme.surfaceContainerHighest),
 			)
 		}
 	}

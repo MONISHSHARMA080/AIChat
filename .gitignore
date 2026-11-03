@@ -44,3 +44,20 @@ functions/lib/
 
 # Android Profiling
 *.hprof
+/public/logos/alibaba.svg
+/public/logos/amazon.svg
+/public/logos/anthropic.svg
+/public/logos/deepseek.svg
+/public/logos/google.svg
+/.firebase/hosting.cHVibGlj.cache
+/public/logos/meta.svg
+/public/logos/microsoft.svg
+/public/logos/minimax.svg
+/public/logos/mistral.svg
+/public/logos/moonshotai.svg
+/public/logos/nvidia.svg
+/public/logos/openai.svg
+/public/logos/perplexity.svg
+/public/logos/spacexai.svg
+/public/logos/tencent.svg
+/public/logos/xiaomi.svg
