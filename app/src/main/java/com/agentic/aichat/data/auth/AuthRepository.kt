@@ -16,6 +16,7 @@ import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
 import com.google.firebase.auth.PhoneMultiFactorInfo
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
@@ -32,17 +33,18 @@ sealed interface GoogleSignInResult {
 @Singleton
 class AuthRepository @Inject constructor(
 	@ApplicationContext private val context: Context,
+	private val firebaseAuth: FirebaseAuth,
 ) {
 	suspend fun signInWithGoogle(activity: Activity): GoogleSignInResult {
 		val idToken = try {
 			fetchIdToken(activity)
 		} catch (error: Exception) {
-			 return when (error){
-				 is GetCredentialCancellationException -> GoogleSignInResult.Cancelled
-				 is NoCredentialException -> GoogleSignInResult.NoAccounts
-				 is GetCredentialInterruptedException -> GoogleSignInResult.Interrupted
-				 else -> GoogleSignInResult.Failed(error)
-			 }
+			return when (error) {
+				is GetCredentialCancellationException -> GoogleSignInResult.Cancelled
+				is NoCredentialException -> GoogleSignInResult.NoAccounts
+				is GetCredentialInterruptedException -> GoogleSignInResult.Interrupted
+				else -> GoogleSignInResult.Failed(error)
+			}
 		}
 		return firebaseSignIn(idToken)
 	}
@@ -64,16 +66,18 @@ class AuthRepository @Inject constructor(
 
 	private suspend fun firebaseSignIn(idToken: String): GoogleSignInResult =
 		withContext(Dispatchers.IO) {
-			val auth = FirebaseAuth.getInstance()
+			val auth = firebaseAuth
 			val outcome = runCatching {
 				val credential = GoogleAuthProvider.getCredential(idToken, null)
 				Tasks.await(auth.signInWithCredential(credential))
 			}
+			val failure = outcome.exceptionOrNull()
+			if (failure is CancellationException) throw failure
 			val user = outcome.getOrNull()?.user?.toAuthUser()
 			if (user != null) {
 				GoogleSignInResult.Success(user)
 			} else {
-				GoogleSignInResult.Failed(outcome.exceptionOrNull() ?: Exception("Empty Firebase user"))
+				GoogleSignInResult.Failed(failure ?: Exception("Empty Firebase user"))
 			}
 		}
 
@@ -89,25 +93,5 @@ class AuthRepository @Inject constructor(
 		tenantId = tenantId,
 		creationTimestamp = metadata?.creationTimestamp,
 		lastSignInTimestamp = metadata?.lastSignInTimestamp,
-//		providerData = providerData.map { info ->
-//			AuthProviderData(
-//				providerId = info.providerId,
-//				uid = info.uid,
-//				displayName = info.displayName,
-//				email = info.email,
-//				phoneNumber = info.phoneNumber,
-//				photoUrl = info.photoUrl?.toString(),
-//				isEmailVerified = info.isEmailVerified,
-//			)
-//		},
-//		enrolledFactors = multiFactor.enrolledFactors.map { factor ->
-//			AuthFactorInfo(
-//				factorId = factor.factorId,
-//				uid = factor.uid,
-//				displayName = factor.displayName,
-//				enrollmentTimestamp = factor.enrollmentTimestamp,
-//				phoneNumber = (factor as? PhoneMultiFactorInfo)?.phoneNumber,
-//			)
-//		},
 	)
 }

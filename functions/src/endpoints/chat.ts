@@ -1,290 +1,287 @@
 import { randomUUID } from "node:crypto";
 import { getApps, initializeApp } from "firebase-admin/app";
-import { getAuth, type DecodedIdToken } from "firebase-admin/auth";
 import { logger } from "firebase-functions";
-import { onRequest, type Request } from "firebase-functions/v2/https";
-import type { Response } from "express";
+import { onCall, HttpsError } from "firebase-functions/https";
 import { streamText } from "ai";
 import { z } from "zod";
 import { AI_GATEWAY_API_KEY, REVENUECAT_COIN_CODE, REVENUECAT_SECRET_API_KEY } from "../config";
-import { fetchModels, getGateway, type Pricing } from "./listModels";
+import { fetchModels, getGateway } from "./listModels";
 
 if (!getApps().length) initializeApp();
 
-const REVENUECAT_BASE = "https://api.revenuecat.com/v2";
+// TODO: use firestore to cache the model and their proces for a day or so if they are >3 days old then fetch the models etc again and can also use it in the listModels 
 
-const envSchema = z.object({
-  USD_PER_COIN: z.coerce.number().positive(),
-  REVENUECAT_PROJECT_ID: z.string().min(1),
-});
+
+const REVENUECAT_BASE_URL = "https://api.revenuecat.com/v2";
 
 const bodySchema = z.object({
   model: z.string().min(1),
   reasoning: z.string().min(1).optional(),
-  messages: z
-    .array(
-      z.object({
-        role: z.enum(["system", "user", "assistant"]),
-        content: z.string().min(1),
-      }),
-    )
+  messages: z.array(
+    z.union([
+      z.object({ role: z.literal("system"), content: z.string().min(1) }),
+      z
+        .object({
+          role: z.literal("user"),
+          content: z.union([
+            z.string(),
+            z
+              .array(
+                z.union([
+                  z.object({ type: z.literal("text"), text: z.string().min(1) }),
+                  z.object({
+                    type: z.literal("file"),
+                    mediaType: z.string().min(1),
+                    filename: z.string().min(1).optional(),
+                    data: z.string().min(1),
+                  }),
+                ]),
+              )
+              .min(1)
+              .max(20),
+          ]),
+          attachments: z
+            .array(
+              z.object({
+                name: z.string().min(1),
+                mimeType: z.string().min(1),
+                data: z.string().min(1),
+              }),
+            )
+            .max(5)
+            .optional(),
+        })
+        .refine(
+          (message) => {
+            const hasText =
+              typeof message.content === "string"
+                ? message.content.trim().length > 0
+                : message.content.length > 0;
+            return hasText || (message.attachments ?? []).length > 0;
+          },
+          { message: "user message needs text or attachments" },
+        ),
+      z.object({ role: z.literal("assistant"), content: z.string().min(1) }),
+    ]),
+  )
     .min(1)
     .max(100),
 });
 
-const balancesSchema = z.object({
+type Body = z.infer<typeof bodySchema>;
+
+// Used twice (balance lookup + deduction response).
+const coinBalancesSchema = z.object({
   items: z.array(z.object({ currency_code: z.string(), balance: z.number() })),
 });
 
-const costSchema = z.object({
-  gateway: z.object({
-    cost: z
-      .union([z.string(), z.number()])
-      .transform(Number)
-      .pipe(z.number().nonnegative()),
-  }),
-});
-
-type Env = z.infer<typeof envSchema>;
-type Body = z.infer<typeof bodySchema>;
-type Message = Body["messages"][number];
-type ReasoningLevel = NonNullable<Parameters<typeof streamText>[0]["reasoning"]>;
-type Result<T> = [T, null] | [null, ApiError];
-
-class ApiError extends Error {
-  status: number;
-
-  constructor(status: number, message: string) {
-    super(message);
-    this.status = status;
-  }
-}
-
-const attempt = <T>(work: Promise<T>): Promise<Result<T>> =>
-  work.then(
-    (value): Result<T> => [value, null],
-    (error): Result<T> => {
-      if (error instanceof ApiError) return [null, error];
-      logger.error("unexpected error", error);
-      return [null, new ApiError(500, "internal error")];
-    },
+// Used twice (balance lookup + deduction response).
+function parseCoinBalance(payload: unknown, errorMessage: string): number {
+  const parsedBalances = coinBalancesSchema.safeParse(payload);
+  if (!parsedBalances.success) throw new HttpsError("unavailable", errorMessage);
+  const coinBalance = parsedBalances.data.items.find(
+    (item) => item.currency_code === REVENUECAT_COIN_CODE.value(),
   );
-
-const sse = (res: Response, event: object) => {
-  if (!res.writable) return;
-  res.write(`data: ${JSON.stringify(event)}\n\n`);
-};
-
-const fail = (res: Response, err: ApiError) => {
-  if (!res.headersSent) {
-    res.status(err.status).json({ error: err.message });
-    return;
-  }
-  sse(res, { type: "error", message: err.message });
-  res.end();
-};
-
-async function readEnv(): Promise<Env> {
-  const parsed = envSchema.safeParse(process.env);
-  if (!parsed.success) {
-    logger.error("invalid environment", parsed.error.issues);
-    throw new ApiError(500, "server misconfigured");
-  }
-  return parsed.data;
+  return coinBalance?.balance ?? 0;
 }
 
-async function authenticate(req: Request): Promise<DecodedIdToken> {
-  const header = req.header("authorization") ?? "";
-  const token = header.startsWith("Bearer ") ? header.slice(7).trim() : "";
-  if (!token) throw new ApiError(401, "missing bearer token");
-  return getAuth()
-    .verifyIdToken(token, true)
-    .catch(() => {
-      throw new ApiError(401, "invalid token");
-    });
-}
-
-async function parseBody(req: Request): Promise<Body> {
-  const parsed = bodySchema.safeParse(req.body);
-  if (!parsed.success) {
-    const detail = parsed.error.issues
-      .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
-      .join("; ");
-    throw new ApiError(400, detail);
-  }
-  return parsed.data;
-}
-
-async function resolvePricing(body: Body): Promise<Pricing> {
-  const models = await fetchModels();
-  const model = models.find((m) => m.id === body.model);
-  if (!model) throw new ApiError(400, "unknown model");
-  if (!model.pricing) throw new ApiError(400, "model has no pricing");
-  if (body.reasoning && !model.reasoning.levels.includes(body.reasoning)) {
-    const allowed = model.reasoning.levels.join(", ") || "none";
-    throw new ApiError(400, `reasoning must be one of: ${allowed}`);
-  }
-  return model.pricing;
-}
-
-async function getBalance(uid: string, env: Env): Promise<number> {
+// Used twice (before the request, and when the charge is 0 coins).
+async function getUserCoinBalance(uid: string, revenueCatProjectId: string): Promise<number> {
   const res = await fetch(
-    `${REVENUECAT_BASE}/projects/${env.REVENUECAT_PROJECT_ID}/customers/${encodeURIComponent(uid)}/virtual_currencies`,
+    `${REVENUECAT_BASE_URL}/projects/${revenueCatProjectId}/customers/${encodeURIComponent(uid)}/virtual_currencies`,
     { headers: { Authorization: `Bearer ${REVENUECAT_SECRET_API_KEY.value()}` } },
   );
   if (res.status === 404) return 0;
   if (!res.ok) {
     logger.error("revenuecat balance lookup failed", res.status, await res.text());
-    throw new ApiError(502, "balance lookup failed");
+    throw new HttpsError("unavailable", "balance lookup failed");
   }
-  const parsed = balancesSchema.safeParse(await res.json());
-  if (!parsed.success) throw new ApiError(502, "unexpected balance response");
-  const item = parsed.data.items.find(
-    (i) => i.currency_code === REVENUECAT_COIN_CODE.value(),
-  );
-  return item?.balance ?? 0;
+  return parseCoinBalance(await res.json(), "unexpected balance response");
 }
 
-function checkLowCredit(input: {
-  balance: number;
-  pricing: Pricing;
-  messages: Message[];
-  usdPerCoin: number;
-}): ApiError | null {
-  const chars = input.messages.reduce((n, m) => n + m.content.length, 0);
-  const inputTokens = Math.ceil(chars / 3);
-  const inputUsd = inputTokens * input.pricing.input;
-  if (input.balance * input.usdPerCoin < inputUsd) {
-    return new ApiError(402, "insufficient credits");
-  }
-  return null;
-}
-
-async function streamChat(res: Response, body: Body, uid: string): Promise<number> {
-  const errors: unknown[] = [];
-  const result = streamText({
-    model: getGateway()(body.model),
-    messages: body.messages,
-    reasoning: body.reasoning as ReasoningLevel | undefined,
-    providerOptions: { gateway: { user: uid, tags: ["chat"] } },
-    onError: ({ error }) => {
-      errors.push(error);
-    },
+function toModelMessages(body: Body) {
+  return body.messages.map((message) => {
+    if (message.role !== "user") return message;
+    const attachments = message.attachments ?? [];
+    if (!attachments.length) return { role: message.role, content: message.content };
+    const parts = [
+      ...(typeof message.content === "string"
+        ? message.content.trim().length > 0
+          ? [{ type: "text" as const, text: message.content }]
+          : []
+        : message.content),
+      ...attachments.map((attachment) => ({
+        type: "file" as const,
+        mediaType: attachment.mimeType,
+        filename: attachment.name,
+        data: attachment.data,
+      })),
+    ];
+    return { role: message.role, content: parts };
   });
-
-  for await (const text of result.textStream) {
-    sse(res, { type: "text", text });
-  }
-
-  if (errors.length) {
-    logger.error("model stream failed", errors[0]);
-    throw new ApiError(502, "model request failed");
-  }
-
-  const parsed = costSchema.safeParse(await result.providerMetadata);
-  if (!parsed.success) {
-    logger.error("gateway reported no cost", parsed.error.issues);
-    throw new ApiError(502, "could not determine cost");
-  }
-  return parsed.data.gateway.cost;
 }
 
-async function deductCoins(
-  uid: string,
-  coins: number,
-  env: Env,
-  key: string,
-): Promise<{ charged: number; balance: number }> {
-  if (coins <= 0) return { charged: 0, balance: await getBalance(uid, env) };
-
-  const res = await fetch(
-    `${REVENUECAT_BASE}/projects/${env.REVENUECAT_PROJECT_ID}/customers/${encodeURIComponent(uid)}/virtual_currencies/transactions`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${REVENUECAT_SECRET_API_KEY.value()}`,
-        "Content-Type": "application/json",
-        "Idempotency-Key": key,
-      },
-      body: JSON.stringify({
-        adjustments: { [REVENUECAT_COIN_CODE.value()]: -coins },
-      }),
-    },
-  );
-
-  if (!res.ok) {
-    logger.error("revenuecat deduction failed", res.status, await res.text());
-    throw new ApiError(502, "deduction failed");
-  }
-
-  const parsed = balancesSchema.safeParse(await res.json());
-  if (!parsed.success) throw new ApiError(502, "unexpected deduction response");
-  const item = parsed.data.items.find(
-    (i) => i.currency_code === REVENUECAT_COIN_CODE.value(),
-  );
-  return { charged: coins, balance: item?.balance ?? 0 };
-}
-
-export const chat = onRequest(
+export const chat = onCall(
   {
-    cors: true,
     timeoutSeconds: 300,
     secrets: [AI_GATEWAY_API_KEY, REVENUECAT_SECRET_API_KEY],
   },
-  async (req, res) => {
-    if (req.method !== "POST") return fail(res, new ApiError(405, "method not allowed"));
+  async (request, response) => {
+    if (!request.auth) throw new HttpsError("unauthenticated", "sign in required");
+    const uid = request.auth.uid;
+    logger.info(`chat request `, { auth: request.auth, data: request.data });
 
-    const [env, envErr] = await attempt(readEnv());
-    if (envErr) return fail(res, envErr);
+    // --- env ---
+    const parsedEnv = z
+      .object({
+        USD_PER_COIN: z.coerce.number().positive(),
+        REVENUECAT_PROJECT_ID: z.string().min(1),
+      })
+      .safeParse(process.env);
+    if (!parsedEnv.success) {
+      logger.error("invalid environment", parsedEnv.error.issues);
+      throw new HttpsError("internal", "server misconfigured");
+    }
+    const { USD_PER_COIN: usdPerCoin, REVENUECAT_PROJECT_ID: revenueCatProjectId } = parsedEnv.data;
 
-    const [user, authErr] = await attempt(authenticate(req));
-    if (authErr) return fail(res, authErr);
-    logger.info("chat request", { uid: user.uid, email: user.email });
+    const parsedBody = bodySchema.safeParse(request.data);
+    if (!parsedBody.success) {
+      const issueSummary = parsedBody.error.issues
+        .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+        .join("; ");
+      throw new HttpsError("invalid-argument", issueSummary);
+    }
+    const body = parsedBody.data;
 
-    const [body, bodyErr] = await attempt(parseBody(req));
-    if (bodyErr) return fail(res, bodyErr);
-
-    const [prep, prepErr] = await attempt(
-      Promise.all([resolvePricing(body), getBalance(user.uid, env)]),
-    );
-    if (prepErr) return fail(res, prepErr);
-    const [pricing, balance] = prep;
-
-    const denied = checkLowCredit({
-      balance,
-      pricing,
-      messages: body.messages,
-      usdPerCoin: env.USD_PER_COIN,
-    });
-    if (denied) return fail(res, denied);
-
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
-      "X-Accel-Buffering": "no",
-    });
-    res.flushHeaders();
-
-    const [costUsd, streamErr] = await attempt(streamChat(res, body, user.uid));
-    if (streamErr) return fail(res, streamErr);
-
-    const coins = Math.ceil(Number((costUsd / env.USD_PER_COIN).toFixed(6)));
-    const [receipt, deductErr] = await attempt(
-      deductCoins(user.uid, coins, env, randomUUID()),
-    );
-    if (deductErr) {
-      logger.error("deduction failed after successful chat", {
-        uid: user.uid,
-        coins,
-        costUsd,
-      });
-      sse(res, { type: "done", charged: 0, balance });
-      res.end();
-      return;
+    // --- model pricing + user balance (parallel) ---
+    const [availableModels, userCoinBalance] = await Promise.all([
+      fetchModels(),
+      getUserCoinBalance(uid, revenueCatProjectId),
+    ]);
+    const model = availableModels.find((m) => m.id === body.model);
+    if (!model) throw new HttpsError("invalid-argument", "unknown model");
+    if (!model.pricing) throw new HttpsError("invalid-argument", "model has no pricing");
+    if (body.reasoning && !model.reasoning.levels.includes(body.reasoning)) {
+      const allowedLevels = model.reasoning.levels.join(", ") || "none";
+      throw new HttpsError("invalid-argument", `reasoning must be one of: ${allowedLevels}`);
+    }
+    const modelPricing = model.pricing;
+    // --- low credit check ---
+    const totalChars = body.messages.reduce((total, message) => {
+      const contentChars =
+        typeof message.content === "string"
+          ? message.content.length
+          : message.content.reduce(
+            (sum, part) => sum + (part.type === "text" ? part.text.length : part.data.length),
+            0,
+          );
+      const attachmentChars =
+        message.role === "user"
+          ? (message.attachments ?? []).reduce((sum, attachment) => sum + attachment.data.length, 0)
+          : 0;
+      return total + contentChars + attachmentChars;
+    }, 0);
+    const estimatedInputTokens = Math.ceil(totalChars / 3.2);
+    const estimatedInputUsd = estimatedInputTokens * modelPricing.input;
+    logger.info(`low credit check , estimatedPriceUsd:${estimatedInputUsd},  modelPricing:   ${JSON.stringify(modelPricing)}, userCoinBalance:${userCoinBalance}, estimatedInputUsd:${estimatedInputUsd}`);
+    if (userCoinBalance * usdPerCoin < estimatedInputUsd) {
+      throw new HttpsError("resource-exhausted", "insufficient credits");
     }
 
-    sse(res, { type: "done", charged: receipt.charged, balance: receipt.balance });
-    res.end();
+    // --- stream the model response ---
+    // Streaming clients (SDK `.stream()`) get chunks via sendChunk and the final
+    // result is just billing info. Non-streaming clients (SDK `.call()`) get the
+    // full text in the callable result instead, since sendChunk would be a no-op.
+    const clientStreams = request.acceptsStreaming;
+    const streamErrors: unknown[] = [];
+    const result = streamText({
+      model: getGateway()(body.model),
+      messages: toModelMessages(body),
+      reasoning: body.reasoning as Parameters<typeof streamText>[0]["reasoning"],
+      providerOptions: { gateway: { user: uid, tags: ["chat"] } },
+      onError: ({ error }) => {
+        streamErrors.push(error);
+      },
+    });
+
+    let fullText = "";
+    for await (const text of result.textStream) {
+      if (clientStreams) {
+        response?.sendChunk({ type: "text", text });
+      } else {
+        fullText += text;
+      }
+    }
+
+    if (streamErrors.length) {
+      logger.error("model stream failed", streamErrors[0]);
+      throw new HttpsError("unavailable", "model request failed");
+    }
+
+    const parsedCost = z
+      .object({
+        gateway: z.object({
+          cost: z
+            .union([z.string(), z.number()])
+            .transform(Number)
+            .pipe(z.number().nonnegative()),
+        }),
+      })
+      .safeParse(await result.providerMetadata);
+    if (!parsedCost.success) {
+      logger.error("gateway reported no cost", parsedCost.error.issues);
+      throw new HttpsError("unavailable", "could not determine cost");
+    }
+    const gatewayCostUsd = parsedCost.data.gateway.cost;
+
+    // --- charge coins (failure here must not fail the chat) ---
+    const coinsToCharge = Math.ceil(Number((gatewayCostUsd / usdPerCoin).toFixed(6)));
+    let chargedCoins = 0;
+    let balanceAfterCharge = userCoinBalance;
+
+    try {
+      if (coinsToCharge <= 0) {
+        balanceAfterCharge = await getUserCoinBalance(uid, revenueCatProjectId);
+      } else {
+        const deductionRes = await fetch(
+          `${REVENUECAT_BASE_URL}/projects/${revenueCatProjectId}/customers/${encodeURIComponent(uid)}/virtual_currencies/transactions`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${REVENUECAT_SECRET_API_KEY.value()}`,
+              "Content-Type": "application/json",
+              "Idempotency-Key": randomUUID(),
+            },
+            body: JSON.stringify({
+              adjustments: { [REVENUECAT_COIN_CODE.value()]: -coinsToCharge },
+            }),
+          },
+        );
+        if (!deductionRes.ok) {
+          logger.error("revenuecat deduction failed", deductionRes.status, await deductionRes.text());
+          throw new HttpsError("unavailable", "deduction failed");
+        }
+        balanceAfterCharge = parseCoinBalance(
+          await deductionRes.json(),
+          "unexpected deduction response",
+        );
+        chargedCoins = coinsToCharge;
+      }
+    } catch (error) {
+      logger.error("deduction failed after successful chat", {
+        uid,
+        coinsToCharge,
+        gatewayCostUsd,
+        error,
+      });
+      chargedCoins = 0;
+      balanceAfterCharge = userCoinBalance;
+    }
+
+    // Streaming: text already delivered as chunks, so return billing only.
+    // Non-streaming: include the full text so `.call()` clients get the reply.
+    return clientStreams
+      ? { charged: chargedCoins, balance: balanceAfterCharge }
+      : { text: fullText, charged: chargedCoins, balance: balanceAfterCharge };
   },
 );

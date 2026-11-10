@@ -6,7 +6,7 @@ import com.agentic.aichat.data.ai.ReasoningDto
 import kotlinx.serialization.json.Json
 
 class ModelConverters {
-	private val json = Json
+	private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
 
 	@ColumnTypeConverter
 	fun fromReasoning(value: String): ReasoningDto = json.decodeFromString<ReasoningDto>(value)

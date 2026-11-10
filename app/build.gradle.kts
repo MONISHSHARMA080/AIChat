@@ -41,7 +41,27 @@ android {
 			buildConfigField(
 				"String",
 				"FUNCTIONS_BASE_URL",
-				"\"http://10.0.2.2:5001/aichat-8d4f3/us-central1/\"",
+				"\"http://192.168.1.53:5001/aichat-8d4f3/us-central1/\"",
+			)
+			buildConfigField(
+				"String",
+				"FIREBASE_AUTH_EMULATOR_HOST",
+				"\"192.168.1.53\"",
+			)
+			buildConfigField(
+				"int",
+				"FIREBASE_AUTH_EMULATOR_PORT",
+				"9099",
+			)
+			buildConfigField(
+				"String",
+				"FUNCTIONS_EMULATOR_HOST",
+				"\"192.168.1.53\"",
+			)
+			buildConfigField(
+				"int",
+				"FUNCTIONS_EMULATOR_PORT",
+				"5001",
 			)
 		}
 		release {
@@ -49,6 +69,26 @@ android {
 				"String",
 				"FUNCTIONS_BASE_URL",
 				"\"https://us-central1-aichat-8d4f3.cloudfunctions.net/\"",
+			)
+			buildConfigField(
+				"String",
+				"FIREBASE_AUTH_EMULATOR_HOST",
+				"\"\"",
+			)
+			buildConfigField(
+				"int",
+				"FIREBASE_AUTH_EMULATOR_PORT",
+				"9099",
+			)
+			buildConfigField(
+				"String",
+				"FUNCTIONS_EMULATOR_HOST",
+				"\"\"",
+			)
+			buildConfigField(
+				"int",
+				"FUNCTIONS_EMULATOR_PORT",
+				"5001",
 			)
 			optimization {
 				enable = false
@@ -92,6 +132,7 @@ dependencies {
 	ksp(libs.androidx.room3.compiler)
 	implementation(platform(libs.firebase.bom))
 	implementation(libs.firebase.auth)
+	implementation(libs.firebase.functions)
 	implementation(libs.androidx.credentials)
 	implementation(libs.androidx.credentials.play.services)
 	implementation(libs.googleid)
@@ -104,6 +145,7 @@ dependencies {
 	implementation(libs.coil3.svg)
 	implementation(libs.kotlinx.serialization.json)
 	implementation(libs.kotlinx.coroutines.android)
+	implementation(libs.kotlinx.coroutines.reactive)
 	testImplementation(libs.junit)
 	testImplementation(libs.kotlinx.coroutines.test)
 	androidTestImplementation(platform(libs.androidx.compose.bom))

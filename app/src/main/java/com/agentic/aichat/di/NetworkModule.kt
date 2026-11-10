@@ -23,7 +23,7 @@ import retrofit2.converter.kotlinx.serialization.asConverterFactory
 object NetworkModule {
 	@Provides
 	@Singleton
-	fun provideJson(): Json = Json { ignoreUnknownKeys = true }
+	fun provideJson(): Json = Json { ignoreUnknownKeys = true; explicitNulls = false }
 
 	@Provides
 	@Singleton
@@ -34,7 +34,7 @@ object NetworkModule {
 		if (BuildConfig.DEBUG) {
 			builder.addInterceptor(
 				HttpLoggingInterceptor().apply {
-					level = HttpLoggingInterceptor.Level.BODY
+					level = HttpLoggingInterceptor.Level.HEADERS
 				},
 			)
 		}

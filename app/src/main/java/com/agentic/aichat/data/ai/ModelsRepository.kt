@@ -1,8 +1,8 @@
 package com.agentic.aichat.data.ai
 
 import com.agentic.aichat.data.ai.db.ModelDao
-import com.agentic.aichat.util.log
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
@@ -20,10 +20,11 @@ class ModelsRepositoryImpl @Inject constructor(
 
 	override suspend fun refreshModels(): Result<Unit> = try {
 		withContext(Dispatchers.IO) {
-			log("getting the models")
 			modelDao.replaceAll(api.listModels().models)
 			Result.success(Unit)
 		}
+	} catch (e: CancellationException) {
+		throw e
 	} catch (e: Exception) {
 		Result.failure(e)
 	}
