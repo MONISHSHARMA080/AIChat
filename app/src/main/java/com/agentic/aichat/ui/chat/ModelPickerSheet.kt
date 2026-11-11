@@ -143,7 +143,6 @@ private fun ModelsScreen(
 			color = scheme.onSurface,
 			modifier = Modifier.padding(horizontal = 8.dp),
 		)
-		SectionLabel(text = "Model")
 		LazyColumn(
 			modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp),
 			verticalArrangement = Arrangement.spacedBy(8.dp),
