@@ -14,10 +14,12 @@ val localPropertiesFile = rootProject.file("local.properties")
 if (localPropertiesFile.exists()) {
 	localPropertiesFile.inputStream().use { localProperties.load(it) }
 }
-val googleWebClientId: String =
-	localProperties.getProperty("google.web.client.id")
-		?: System.getenv("GOOGLE_WEB_CLIENT_ID")
-		?: ""
+fun buildConfigValue(localKey: String, envKey: String): String =
+	localProperties.getProperty(localKey) ?: System.getenv(envKey) ?: ""
+
+val googleWebClientId: String = buildConfigValue("google.web.client.id", "GOOGLE_WEB_CLIENT_ID")
+val revenueCatPublicSdkKeyDebug: String = buildConfigValue("revenuecat.public.sdk.key", "REVENUECAT_PUBLIC_SDK_KEY")
+val revenueCatPublicSdkKeyRelease: String = System.getenv("REVENUECAT_PUBLIC_SDK_KEY") ?: ""
 
 android {
 	namespace = "com.agentic.aichat"
@@ -34,6 +36,7 @@ android {
 
 		testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 		buildConfigField("String", "GOOGLE_WEB_CLIENT_ID", "\"$googleWebClientId\"")
+		buildConfigField("String", "REVENUECAT_PUBLIC_SDK_KEY", "\"$revenueCatPublicSdkKeyDebug\"")
 	}
 
 	buildTypes {
@@ -63,6 +66,7 @@ android {
 				"FUNCTIONS_EMULATOR_PORT",
 				"5001",
 			)
+			buildConfigField("String", "REVENUECAT_PUBLIC_SDK_KEY", "\"$revenueCatPublicSdkKeyDebug\"")
 		}
 		release {
 			buildConfigField(
@@ -90,6 +94,7 @@ android {
 				"FUNCTIONS_EMULATOR_PORT",
 				"5001",
 			)
+			buildConfigField("String", "REVENUECAT_PUBLIC_SDK_KEY", "\"$revenueCatPublicSdkKeyRelease\"")
 			optimization {
 				enable = false
 			}
