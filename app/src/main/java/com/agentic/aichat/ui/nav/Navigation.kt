@@ -49,12 +49,10 @@ fun AppNavDisplay(
 			entry<Onboarding> {
 				OnboardingScreen(
 					onFinished = { modelId, effort, goal ->
-//						OnboardingPrefs.save(context, modelId, effort.name, goal)
 						backStack.clear()
 						backStack.add(ChatHome)
 					},
 					onSkip = {
-//						OnboardingPrefs.save(context, "spark-1", "Medium", "everyday")
 						backStack.clear()
 						backStack.add(ChatHome)
 					},
