@@ -10,13 +10,10 @@ data object Onboarding : NavKey
 data object SignIn : NavKey
 
 @Serializable
-data object ChatHome : NavKey
-
-@Serializable
 data object ChatList : NavKey
 
 @Serializable
-data class ChatDetail(val chatId: String?) : NavKey
+data class ChatDetail(val chatId: String? = null) : NavKey
 
 @Serializable
 data object Settings : NavKey

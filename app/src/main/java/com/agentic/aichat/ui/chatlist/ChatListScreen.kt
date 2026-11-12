@@ -1,6 +1,5 @@
 package com.agentic.aichat.ui.chatlist
 
-
 import android.content.res.Configuration
 import android.text.format.DateUtils
 import androidx.compose.foundation.background
@@ -41,6 +40,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,74 +56,47 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.agentic.aichat.data.chat.db.entity.ChatEntity
 import com.agentic.aichat.ui.theme.AIChatTheme
 import com.agentic.aichat.ui.theme.navIconButtonShapes
-import java.util.concurrent.TimeUnit
-
-private data class ChatListEntry(
-		val chat: ChatEntity,
-		val isPinned: Boolean,
-)
 
 private val GroupContainerShape = RoundedCornerShape(28.dp)
-
-@Composable
-private fun rememberDummyChats(): List<ChatListEntry> = remember {
-	val now = System.currentTimeMillis()
-	listOf(
-			dummyChat("c-music", "Music night out", now - TimeUnit.MINUTES.toMillis(12), isPinned = true),
-			dummyChat("c-trip", "Weekend trip", now - TimeUnit.HOURS.toMillis(3), isPinned = true, modelId = "spark-reasoner"),
-			dummyChat("c-recipes", "Smoothie recipes", now - TimeUnit.HOURS.toMillis(26)),
-			dummyChat("c-rent", "Apartment hunt", now - TimeUnit.HOURS.toMillis(30), modelId = "spark-1-mini"),
-			dummyChat("ca-gy", "Gym plan", now - TimeUnit.DAYS.toMillis(2)),
-			dummyChat("cb-ehjb gym", "Gym plan", now - TimeUnit.DAYS.toMillis(2)),
-			dummyChat("cd-gkicjbeym", "Gym plan", now - TimeUnit.DAYS.toMillis(2)),
-			dummyChat("ce-g9m", "Gym plan", now - TimeUnit.DAYS.toMillis(2)),
-			dummyChat("cw-gy9m", "Gym plan", now - TimeUnit.DAYS.toMillis(2)),
-			dummyChat("ca-gy9m", "Gym plan", now - TimeUnit.DAYS.toMillis(2)),
-			dummyChat("cb-gymub", "Gym plan", now - TimeUnit.DAYS.toMillis(2)),
-			dummyChat("cd-7gym", "Gym plan", now - TimeUnit.DAYS.toMillis(2)),
-			dummyChat("ce-gnym", "Gym plan", now - TimeUnit.DAYS.toMillis(2)),
-			dummyChat("cw-gy23m", "Gym plan", now - TimeUnit.DAYS.toMillis(2)),
-			dummyChat("c-gym", "Gym plan", now - TimeUnit.DAYS.toMillis(2)),
-			dummyChat("c-thesis", "Thesis outline", now - TimeUnit.DAYS.toMillis(4), modelId = "spark-reasoner"),
-			dummyChat("c-plants", "Plant care", now - TimeUnit.DAYS.toMillis(6), modelId = "spark-1-mini"),
-		)
-}
-
-private fun dummyChat(
-		id: String,
-		title: String,
-		updatedAt: Long,
-		isPinned: Boolean = false,
-		modelId: String = "spark-1",
-) = ChatListEntry(
-		chat = ChatEntity(
-			id = id,
-			title = title,
-			modelId = modelId,
-			createdAt = updatedAt - TimeUnit.DAYS.toMillis(3),
-			updatedAt = updatedAt,
-			lastMessageText = null,
-			lastMessageAt = null,
-		),
-		isPinned = isPinned,
-)
-
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun ChatListScreen(
-		modifier: Modifier = Modifier,
-		onBack: () -> Unit = {},
-		onChatSelected: (String) -> Unit = {},
-		onOpenSettings: () -> Unit = {},
-		onNewChat: () -> Unit = {},
+	modifier: Modifier = Modifier,
+	onBack: () -> Unit = {},
+	onChatSelected: (String) -> Unit = {},
+	onOpenSettings: () -> Unit = {},
+	onNewChat: () -> Unit = {},
+	viewModel: ChatListViewModel = hiltViewModel(),
 ) {
-	val chats = rememberDummyChats()
-	val pinned = remember(chats) { chats.filter { it.isPinned } }
-	val others = remember(chats) { chats.filterNot { it.isPinned } }
+	val chats by viewModel.chats.collectAsStateWithLifecycle()
+	ChatListContent(
+		chats = chats,
+		onBack = onBack,
+		onChatSelected = onChatSelected,
+		onOpenSettings = onOpenSettings,
+		onNewChat = onNewChat,
+		modifier = modifier,
+	)
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+private fun ChatListContent(
+	chats: List<ChatEntity>,
+	onBack: () -> Unit,
+	onChatSelected: (String) -> Unit,
+	onOpenSettings: () -> Unit,
+	onNewChat: () -> Unit,
+	modifier: Modifier = Modifier,
+) {
+	val pinned = remember(chats) { chats.filter { it.isPinned() } }
+	val others = remember(chats) { chats.filterNot { it.isPinned() } }
 	val topBarScrollBehavior = TopAppBarDefaults.enterAlwaysScrollBehavior()
 
 	Scaffold(
@@ -160,38 +133,38 @@ fun ChatListScreen(
 				),
 			) {
 				if (pinned.isNotEmpty()) {
-				item(key = "pinned-header") {
-					SectionHeader(
-						title = "Pinned",
-						icon = Icons.Filled.PushPin,
-						modifier = Modifier.animateItem(),
-					)
+					item(key = "pinned-header") {
+						SectionHeader(
+							title = "Pinned",
+							icon = Icons.Filled.PushPin,
+							modifier = Modifier.animateItem(),
+						)
+					}
+					itemsIndexed(pinned, key = { _, chat -> chat.id }) { index, chat ->
+						ChatRow(
+							chat = chat,
+							onClick = { onChatSelected(chat.id) },
+							shape = groupRowShape(index, pinned.size),
+							modifier = Modifier.animateItem(),
+						)
+					}
 				}
-				itemsIndexed(pinned, key = { _, entry -> entry.chat.id }) { index, entry ->
-					ChatRow(
-						entry = entry,
-						onClick = { onChatSelected(entry.chat.id) },
-						shape = groupRowShape(index, pinned.size),
-						modifier = Modifier.animateItem(),
-					)
+				if (others.isNotEmpty()) {
+					item(key = "all-header") {
+						SectionHeader(
+							title = "All chats",
+							modifier = Modifier.animateItem(),
+						)
+					}
+					itemsIndexed(others, key = { _, chat -> chat.id }) { index, chat ->
+						ChatRow(
+							chat = chat,
+							onClick = { onChatSelected(chat.id) },
+							shape = groupRowShape(index, others.size),
+							modifier = Modifier.animateItem(),
+						)
+					}
 				}
-			}
-			if (others.isNotEmpty()) {
-				item(key = "all-header") {
-					SectionHeader(
-						title = "All chats",
-						modifier = Modifier.animateItem(),
-					)
-				}
-				itemsIndexed(others, key = { _, entry -> entry.chat.id }) { index, entry ->
-					ChatRow(
-						entry = entry,
-						onClick = { onChatSelected(entry.chat.id) },
-						shape = groupRowShape(index, others.size),
-						modifier = Modifier.animateItem(),
-					)
-				}
-			}
 			}
 			Box(
 				modifier = Modifier
@@ -231,11 +204,13 @@ fun ChatListScreen(
 	}
 }
 
+private fun ChatEntity.isPinned(): Boolean = false
+
 @Composable
 private fun SectionHeader(
-		title: String,
-		modifier: Modifier = Modifier,
-		icon: ImageVector? = null,
+	title: String,
+	modifier: Modifier = Modifier,
+	icon: ImageVector? = null,
 ) {
 	val scheme = MaterialTheme.colorScheme
 	Row(
@@ -271,10 +246,10 @@ private fun groupRowShape(index: Int, count: Int): Shape = when (index) {
 
 @Composable
 private fun ChatRow(
-		entry: ChatListEntry,
-		onClick: () -> Unit,
-		shape: Shape,
-		modifier: Modifier = Modifier,
+	chat: ChatEntity,
+	onClick: () -> Unit,
+	shape: Shape,
+	modifier: Modifier = Modifier,
 ) {
 	val scheme = MaterialTheme.colorScheme
 	Row(
@@ -292,14 +267,14 @@ private fun ChatRow(
 				.padding(horizontal = 12.dp),
 		) {
 			Text(
-				text = entry.chat.title,
+				text = chat.title,
 				style = MaterialTheme.typography.titleMedium,
 				maxLines = 1,
 				overflow = TextOverflow.Ellipsis,
 			)
 		}
 		Text(
-			text = DateUtils.getRelativeTimeSpanString(entry.chat.updatedAt).toString(),
+			text = DateUtils.getRelativeTimeSpanString(chat.updatedAt).toString(),
 			style = MaterialTheme.typography.labelSmall,
 			color = scheme.onSurfaceVariant,
 		)
@@ -310,7 +285,13 @@ private fun ChatRow(
 @Composable
 private fun ChatListScreenPreviewLight() {
 	AIChatTheme(darkTheme = false) {
-		ChatListScreen()
+		ChatListContent(
+			chats = emptyList(),
+			onBack = {},
+			onChatSelected = {},
+			onOpenSettings = {},
+			onNewChat = {},
+		)
 	}
 }
 
@@ -322,6 +303,12 @@ private fun ChatListScreenPreviewLight() {
 @Composable
 private fun ChatListScreenPreviewDark() {
 	AIChatTheme(darkTheme = true) {
-		ChatListScreen()
+		ChatListContent(
+			chats = emptyList(),
+			onBack = {},
+			onChatSelected = {},
+			onOpenSettings = {},
+			onNewChat = {},
+		)
 	}
 }

@@ -57,6 +57,9 @@ class ChatViewModel @Inject constructor(
 
 	fun openChat(chatId: String?) {
 		activeChatId.value = chatId
+		if (chatId == null) {
+			_uiState.update { it.copy(chat = null, messages = emptyList(), streamingText = "", pendingModelId = null, isSending = false, chatErrorMessage = null) }
+		}
 	}
 
 	fun send(request: SendRequest) {

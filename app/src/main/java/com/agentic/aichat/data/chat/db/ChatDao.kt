@@ -11,7 +11,6 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface ChatDao {
 
-	/** All chats for the side panel, most recently updated first. */
 	@Query("SELECT * FROM chats ORDER BY updatedAt DESC")
 	fun observeAll(): Flow<List<ChatEntity>>
 
@@ -33,17 +32,12 @@ interface ChatDao {
 	@Query("UPDATE chats SET modelId = :modelId WHERE id = :chatId")
 	suspend fun updateModel(chatId: String, modelId: String)
 
-	/**
-	 * Refreshes the denormalized preview on the chat row. Call this in the
-	 * same transaction as the message write that produced the preview.
-	 */
 	@Query(
 		"UPDATE chats SET lastMessageText = :text, lastMessageAt = :at, updatedAt = :at " +
 			"WHERE id = :chatId"
 	)
 	suspend fun updateLastMessage(chatId: String, text: String?, at: Long)
 
-	/** Messages are deleted by the foreign-key cascade on the chat row. */
 	@Query("DELETE FROM chats WHERE id = :chatId")
 	suspend fun deleteById(chatId: String)
 }

@@ -6,14 +6,12 @@ import androidx.room3.ForeignKey
 import androidx.room3.Index
 import androidx.room3.PrimaryKey
 
-/** Which side of the conversation a [MessageEntity] belongs to. */
 enum class MessageRole {
 	USER,
 	ASSISTANT,
 	SYSTEM,
 }
 
-/** Lifecycle of a [MessageEntity], used to drive the streaming UI. */
 enum class MessageStatus {
 	SENDING,
 	STREAMING,
@@ -21,13 +19,6 @@ enum class MessageStatus {
 	ERROR,
 }
 
-/**
- * Row in the `messages` table — one bubble in a chat.
- *
- * Deleting a chat cascades to its messages via the foreign key. The composite
- * `(chatId, createdAt)` index backs the messages-per-chat read, which is the
- * hot query for the chat screen.
- */
 @Entity(
 	tableName = "messages",
 	foreignKeys = [

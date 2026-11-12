@@ -8,7 +8,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import com.agentic.aichat.BuildConfig
 import com.agentic.aichat.ui.nav.AppNavDisplay
-import com.agentic.aichat.ui.nav.rememberAppBackStack
 import com.agentic.aichat.ui.theme.AIChatTheme
 import dagger.hilt.android.AndroidEntryPoint
 

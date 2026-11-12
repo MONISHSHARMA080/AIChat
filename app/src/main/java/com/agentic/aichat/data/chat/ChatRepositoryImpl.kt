@@ -39,6 +39,8 @@ class ChatRepositoryImpl @Inject constructor(
 	private val messageDao: MessageDao,
 ) : ChatRepository {
 
+	override fun getAllChats(): Flow<List<ChatEntity>> = chatDao.observeAll()
+
 	override fun observeChat(chatId: String): Flow<ChatEntity?> = chatDao.observeById(chatId)
 
 	override fun observeMessages(chatId: String): Flow<List<MessageEntity>> =
@@ -62,11 +64,9 @@ class ChatRepositoryImpl @Inject constructor(
 		return chat
 	}
 
-	override suspend fun renameChat(chatId: String, title: String) =
-		chatDao.rename(chatId, title)
+	override suspend fun renameChat(chatId: String, title: String) = chatDao.rename(chatId, title)
 
-	override suspend fun updateChatModel(chatId: String, modelId: String) =
-		chatDao.updateModel(chatId, modelId)
+	override suspend fun updateChatModel(chatId: String, modelId: String) = chatDao.updateModel(chatId, modelId)
 
 	override suspend fun deleteChat(chatId: String) = chatDao.deleteById(chatId)
 
@@ -77,8 +77,7 @@ class ChatRepositoryImpl @Inject constructor(
 		}
 	}
 
-	override suspend fun updateMessageStatus(messageId: String, status: MessageStatus) =
-		messageDao.updateStatus(messageId, status)
+	override suspend fun updateMessageStatus(messageId: String, status: MessageStatus) = messageDao.updateStatus(messageId, status)
 
 	override suspend fun deleteMessage(messageId: String) = messageDao.deleteById(messageId)
 

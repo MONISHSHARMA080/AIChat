@@ -9,7 +9,6 @@ import com.agentic.aichat.data.chat.db.entity.MessageEntity
 
 import androidx.room3.ColumnTypeConverters
 import com.agentic.aichat.data.ai.db.ModelConverters
-import com.agentic.aichat.data.chat.db.ChatConverters
 
 @Database(
 	entities = [ChatEntity::class, MessageEntity::class, ModelDto::class],

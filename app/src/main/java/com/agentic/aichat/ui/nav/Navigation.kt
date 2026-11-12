@@ -10,6 +10,7 @@ import androidx.navigation3.runtime.NavKey
 import androidx.navigation3.runtime.entryProvider
 import androidx.navigation3.runtime.rememberNavBackStack
 import androidx.navigation3.ui.NavDisplay
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import com.agentic.aichat.ui.chat.ChatScreen
 import com.agentic.aichat.ui.chatlist.ChatListScreen
 import com.agentic.aichat.ui.onboarding.OnboardingScreen
@@ -17,13 +18,7 @@ import com.agentic.aichat.ui.paywall.PaywallScreen
 import com.agentic.aichat.ui.settings.SettingsScreen
 import com.agentic.aichat.ui.signin.SignInScreen
 
-/** Default (start) destination is the chat. */
-@Composable
-fun rememberAppBackStack(startKey: NavKey = ChatHome): NavBackStack<NavKey> = rememberNavBackStack(startKey)
-
 private fun NavBackStack<NavKey>.popSafely() {
-	// The root entry (ChatHome) must never be popped: rapid/double back gestures
-	// would drain the stack and NavDisplay's last-entry pop crashes the app.
 	if (size > 1) removeAt(size - 1)
 }
 
@@ -31,8 +26,7 @@ private fun NavBackStack<NavKey>.popSafely() {
 fun AppNavDisplay(
 	modifier: Modifier = Modifier,
 ) {
-//	val backStack = rememberAppBackStack(SignIn)
-	val backStack = rememberAppBackStack(ChatHome)
+	val backStack = rememberNavBackStack(ChatDetail())
 
 	Surface(
 		modifier = modifier.fillMaxSize(),
@@ -40,7 +34,6 @@ fun AppNavDisplay(
 	) {
 	NavDisplay(
 		backStack = backStack,
-		// Guarded pop: a second back gesture while the stack is at its root is a no-op.
 		onBack = { backStack.popSafely() },
 		transitionSpec = { NavTransitions.forward() },
 		popTransitionSpec = { NavTransitions.pop() },
@@ -50,11 +43,11 @@ fun AppNavDisplay(
 				OnboardingScreen(
 					onFinished = { modelId, effort, goal ->
 						backStack.clear()
-						backStack.add(ChatHome)
+						backStack.add(ChatDetail())
 					},
 					onSkip = {
 						backStack.clear()
-						backStack.add(ChatHome)
+						backStack.add(ChatDetail())
 					},
 				)
 			}
@@ -62,15 +55,8 @@ fun AppNavDisplay(
 				SignInScreen(
 					onSignInSuccess = {
 						backStack.clear()
-						backStack.add(ChatHome)
+						backStack.add(ChatDetail())
 					},
-				)
-			}
-			entry<ChatHome> {
-				ChatScreen(
-					onOpenChatList = { backStack.add(ChatList) },
-					onOpenPaywall = { backStack.add(Paywall) },
-					onOpenSignIn = { backStack.add(SignIn) },
 				)
 			}
 			entry<ChatDetail> { key ->
@@ -79,6 +65,7 @@ fun AppNavDisplay(
 					onOpenChatList = { backStack.add(ChatList) },
 					onOpenPaywall = { backStack.add(Paywall) },
 					onOpenSignIn = { backStack.add(SignIn) },
+					viewModel = hiltViewModel(key = key.chatId ?: "chat_new"),
 				)
 			}
 			entry<ChatList> {
@@ -86,7 +73,7 @@ fun AppNavDisplay(
 					onBack = { backStack.popSafely() },
 					onChatSelected = { chatId -> backStack.add(ChatDetail(chatId)) },
 					onOpenSettings = { backStack.add(Settings) },
-					onNewChat = { backStack.add(ChatDetail(null)) },
+					onNewChat = { backStack.add(ChatDetail()) },
 				)
 			}
 			entry<Settings> {

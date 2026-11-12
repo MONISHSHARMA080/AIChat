@@ -8,6 +8,8 @@ import kotlinx.coroutines.flow.Flow
 
 interface ChatRepository {
 
+	fun getAllChats(): Flow<List<ChatEntity>>
+
 	fun observeChat(chatId: String): Flow<ChatEntity?>
 
 	fun observeMessages(chatId: String): Flow<List<MessageEntity>>
