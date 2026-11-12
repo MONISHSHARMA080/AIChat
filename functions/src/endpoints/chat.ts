@@ -153,11 +153,20 @@ export const chat = onCall(
     }
     const body = parsedBody.data;
 
-    // --- model pricing + user balance (parallel) ---
-    const [availableModels, userCoinBalance] = await Promise.all([
+    const [modelsResult, balanceResult] = await Promise.allSettled([
       fetchModels(),
       getUserCoinBalance(uid, revenueCatProjectId),
     ]);
+
+    if (modelsResult.status === "rejected") {
+      logger.error("model list failed", modelsResult.reason);
+      throw new HttpsError("unavailable", "could not load models");
+    }
+    if (balanceResult.status === "rejected") {
+      logger.error("balance lookup failed", balanceResult.reason);
+      throw new HttpsError("unavailable", "balance lookup failed");
+    }
+    const [availableModels, userCoinBalance] = [modelsResult.value, balanceResult.value];
     const model = availableModels.find((m) => m.id === body.model);
     if (!model) throw new HttpsError("invalid-argument", "unknown model");
     if (!model.pricing) throw new HttpsError("invalid-argument", "model has no pricing");
@@ -187,7 +196,6 @@ export const chat = onCall(
     if (userCoinBalance * usdPerCoin < estimatedInputUsd) {
       throw new HttpsError("resource-exhausted", "insufficient credits");
     }
-
     // --- stream the model response ---
     // Streaming clients (SDK `.stream()`) get chunks via sendChunk and the final
     // result is just billing info. Non-streaming clients (SDK `.call()`) get the
@@ -235,7 +243,7 @@ export const chat = onCall(
     const gatewayCostUsd = parsedCost.data.gateway.cost;
 
     // --- charge coins (failure here must not fail the chat) ---
-    const coinsToCharge = Math.ceil(Number((gatewayCostUsd / usdPerCoin).toFixed(6)));
+    const coinsToCharge = Math.ceil(Number((gatewayCostUsd / usdPerCoin).toFixed(7)));
     let chargedCoins = 0;
     let balanceAfterCharge = userCoinBalance;
 
@@ -266,6 +274,8 @@ export const chat = onCall(
           "unexpected deduction response",
         );
         chargedCoins = coinsToCharge;
+        // console.log(`gatewayCostUsd:${gatewayCostUsd}, coinsToCharge:${coinsToCharge}, balanceBeforeCharge:${userCoinBalance},   `);
+
       }
     } catch (error) {
       logger.error("deduction failed after successful chat", {

@@ -2,9 +2,11 @@ package com.agentic.aichat
 
 import android.app.Application
 import android.content.pm.ApplicationInfo
+import com.agentic.aichat.BuildConfig
 import com.agentic.aichat.billing.RevenueCatConfig
 import com.agentic.aichat.util.log
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.functions.FirebaseFunctions
 import com.revenuecat.purchases.CustomerInfo
 import com.revenuecat.purchases.LogLevel
 import com.revenuecat.purchases.Purchases
@@ -22,6 +24,16 @@ class AiChatApplication : Application() {
 
 	override fun onCreate() {
 		super.onCreate()
+		if (BuildConfig.DEBUG) {
+			FirebaseAuth.getInstance().useEmulator(
+				BuildConfig.FIREBASE_AUTH_EMULATOR_HOST,
+				BuildConfig.FIREBASE_AUTH_EMULATOR_PORT,
+			)
+			FirebaseFunctions.getInstance("us-central1").useEmulator(
+				BuildConfig.FUNCTIONS_EMULATOR_HOST,
+				BuildConfig.FUNCTIONS_EMULATOR_PORT,
+			)
+		}
 		if (isDebuggable()) {
 			Purchases.logLevel = LogLevel.DEBUG
 		}

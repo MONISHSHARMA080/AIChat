@@ -69,20 +69,25 @@ fun AppNavDisplay(
 				)
 			}
 			entry<ChatHome> {
-				ChatScreen(onOpenChatList = { backStack.add(ChatList) })
+				ChatScreen(
+					onOpenChatList = { backStack.add(ChatList) },
+					onOpenPaywall = { backStack.add(Paywall) },
+					onOpenSignIn = { backStack.add(SignIn) },
+				)
 			}
 			entry<ChatDetail> { key ->
-				// use this key to fetch the chat form the view model
 				ChatScreen(
 					chatId = key.chatId,
 					onOpenChatList = { backStack.add(ChatList) },
+					onOpenPaywall = { backStack.add(Paywall) },
+					onOpenSignIn = { backStack.add(SignIn) },
 				)
 			}
 			entry<ChatList> {
 				ChatListScreen(
 					onBack = { backStack.popSafely() },
 					onChatSelected = { chatId -> backStack.add(ChatDetail(chatId)) },
-					onOpenSettings = { backStack.add(SignIn) },
+					onOpenSettings = { backStack.add(Settings) },
 				)
 			}
 			entry<Settings> {

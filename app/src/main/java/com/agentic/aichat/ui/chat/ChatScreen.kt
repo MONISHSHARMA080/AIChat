@@ -60,7 +60,6 @@ import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -99,7 +98,7 @@ import com.agentic.aichat.data.chat.db.entity.ChatEntity
 import com.agentic.aichat.data.chat.db.entity.MessageEntity
 import com.agentic.aichat.data.chat.db.entity.MessageRole
 import com.agentic.aichat.data.chat.db.entity.MessageStatus
-import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.agentic.aichat.data.ai.ModelDto
 import com.agentic.aichat.data.ai.ReasoningDto
@@ -116,19 +115,33 @@ private fun statusLabel(status: MessageStatus): String = when (status) {
 
 @Composable
 fun ChatScreen(
-	chatId: String? = null,
 	modifier: Modifier = Modifier,
+	chatId: String? = null,
 	onOpenChatList: () -> Unit = {},
+	onOpenPaywall: () -> Unit = {},
+	onOpenSignIn: () -> Unit = {},
 	viewModel: ChatViewModel = hiltViewModel(),
 ) {
 	val state by viewModel.uiState.collectAsStateWithLifecycle()
 	LaunchedEffect(chatId) {
 		viewModel.openChat(chatId)
 	}
+	LaunchedEffect(state.showPaywall) {
+		if (state.showPaywall) {
+			viewModel.consumePaywall()
+			onOpenPaywall()
+		}
+	}
+	LaunchedEffect(state.showSignIn) {
+		if (state.showSignIn) {
+			viewModel.consumeSignIn()
+			onOpenSignIn()
+		}
+	}
 	ChatScreenContent(
 		state = state,
-		onSendMessage = { request -> viewModel.send(request) },
-		onRetryMessage = { request -> viewModel.retry(request) },
+		onSendMessage = viewModel::send,
+		onRetryMessage = viewModel::retry,
 		onRetryModels = viewModel::refreshModels,
 		onSelectModel = viewModel::selectModel,
 		onClearError = viewModel::clearError,
@@ -155,7 +168,7 @@ private fun ChatScreenContent(
 	val streamingText = state.streamingText
 	var draft by remember { mutableStateOf("") }
 	var stagedImage by remember { mutableStateOf(false) }
-	val effectiveModelId = state.chat?.modelId ?: models.firstOrNull()?.id
+	val effectiveModelId = state.pendingModelId ?: state.chat?.modelId ?: models.firstOrNull()?.id
 	val selectedModel = models.firstOrNull { it.id == effectiveModelId } ?: models.firstOrNull()
 	val supportsReasoning = selectedModel?.reasoning?.levels?.isNotEmpty() == true
 	val levels = if (supportsReasoning) selectedModel.reasoning.levels else emptyList()
@@ -233,7 +246,7 @@ private fun ChatScreenContent(
 						start = LIST_SIDE_PADDING,
 						end = LIST_SIDE_PADDING,
 						top = 8.dp,
-						bottom = (if (composerHeightPx > 0f) with(density) { composerHeightPx.toDp() } else 84.dp) + 8.dp + with(density) { sendRevealBottomPx.toDp() },
+						bottom = (if (composerHeightPx > 0f) with(density) { composerHeightPx.toDp() } else 84.dp) + 8.dp + with(density) { sendRevealBottomPx.toDp() } + 20.dp,
 					),
 					verticalArrangement = Arrangement.spacedBy(2.dp),
 					userScrollEnabled = flights.isEmpty(),
@@ -281,8 +294,7 @@ private fun ChatScreenContent(
 					onTextFieldBoundsInRoot = { composerBounds.textField = it },
 					onSend = {
 						val text = draft.trim()
-						val model = selectedModel
-						if (text.isEmpty() || model == null) return@ChatComposer
+						if (text.isEmpty()) return@ChatComposer
 						val id = UUID.randomUUID().toString()
 						val hasImage = stagedImage
 						sendRevealBottomPx = imeBottomPx.toFloat()
@@ -313,7 +325,7 @@ private fun ChatScreenContent(
 								maxWidthPx = maxWidthPx,
 							)
 						}
-						onSendMessage(SendRequest(id, text, model.id, safeReasoning))
+						onSendMessage(SendRequest(id, text, selectedModel.id, safeReasoning))
 						draft = ""
 						stagedImage = false
 					},

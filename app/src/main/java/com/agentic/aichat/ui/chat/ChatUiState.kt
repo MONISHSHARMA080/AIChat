@@ -19,6 +19,7 @@ data class RetryRequest(
 
 data class ChatUiState(
 	val chat: ChatEntity? = null,
+	val pendingModelId: String? = null,
 	val messages: List<MessageEntity> = emptyList(),
 	val streamingText: String = "",
 	val models: List<ModelDto> = emptyList(),
@@ -26,4 +27,6 @@ data class ChatUiState(
 	val isSending: Boolean = false,
 	val chatErrorMessage: String? = null,
 	val modelsErrorMessage: String? = null,
+	val showPaywall: Boolean = false,
+	val showSignIn: Boolean = false,
 )

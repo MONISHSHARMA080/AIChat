@@ -44,12 +44,12 @@ android {
 			buildConfigField(
 				"String",
 				"FUNCTIONS_BASE_URL",
-				"\"http://192.168.1.53:5001/aichat-8d4f3/us-central1/\"",
+				"\"http://10.0.2.2:5001/aichat-8d4f3/us-central1/\"",
 			)
 			buildConfigField(
 				"String",
 				"FIREBASE_AUTH_EMULATOR_HOST",
-				"\"192.168.1.53\"",
+				"\"10.0.2.2\"",
 			)
 			buildConfigField(
 				"int",
@@ -59,7 +59,7 @@ android {
 			buildConfigField(
 				"String",
 				"FUNCTIONS_EMULATOR_HOST",
-				"\"192.168.1.53\"",
+				"\"10.0.2.2\"",
 			)
 			buildConfigField(
 				"int",

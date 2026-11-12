@@ -7,8 +7,8 @@ import com.agentic.aichat.data.chat.ChatRepository
 import com.agentic.aichat.data.chat.Outcome
 import com.agentic.aichat.data.chat.ChatError
 import com.agentic.aichat.data.chat.ChatStreamException
-import com.agentic.aichat.data.chat.db.entity.ChatAttachment
 import com.agentic.aichat.util.log
+import com.google.firebase.auth.FirebaseAuth
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
@@ -28,6 +28,7 @@ import kotlinx.coroutines.launch
 class ChatViewModel @Inject constructor(
 	private val chatRepository: ChatRepository,
 	private val modelsRepository: ModelsRepository,
+	private val firebaseAuth: FirebaseAuth,
 ) : ViewModel() {
 	private val _uiState = MutableStateFlow(ChatUiState(isLoading = true))
 	val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
@@ -58,41 +59,37 @@ class ChatViewModel @Inject constructor(
 		activeChatId.value = chatId
 	}
 
-	fun send(
-		messageId: String,
-		text: String,
-		modelId: String,
-		reasoning: String?,
-		attachments: List<ChatAttachment> = emptyList(),
-	) {
-		val content = text.trim()
-		if ((content.isEmpty() && attachments.isEmpty()) || _uiState.value.isSending) return
-		runStream(next = {
-			val chatId = activeChatId.value ?: createChat(content.ifBlank {
-				attachments.firstOrNull()?.name.orEmpty()
-			}, modelId)
-			chatRepository.sendMessage(chatId, messageId, content, modelId, reasoning?.ifBlank { null }, attachments)
-		})
-	}
-
 	fun send(request: SendRequest) {
-		send(request.messageId, request.text, request.modelId, request.reasoning)
-	}
-
-	fun retry(messageId: String, modelId: String, reasoning: String?) {
-		val chatId = activeChatId.value ?: return
-		if (_uiState.value.isSending) return
+		val content = request.text.trim()
+		if (content.isEmpty() || _uiState.value.isSending) return
+		if (firebaseAuth.currentUser == null) {
+			_uiState.update { it.copy(showSignIn = true) }
+			return
+		}
 		runStream(next = {
-			chatRepository.retryMessage(chatId, messageId, modelId, reasoning?.ifBlank { null })
+			val chatId = activeChatId.value ?: createChat(content, request.modelId)
+			chatRepository.sendMessage(chatId, request.messageId, content, request.modelId, request.reasoning?.ifBlank { null })
 		})
 	}
 
 	fun retry(request: RetryRequest) {
-		retry(request.messageId, request.modelId, request.reasoning)
+		val chatId = activeChatId.value ?: return
+		if (_uiState.value.isSending) return
+		if (firebaseAuth.currentUser == null) {
+			_uiState.update { it.copy(showSignIn = true) }
+			return
+		}
+		runStream(next = {
+			chatRepository.retryMessage(chatId, request.messageId, request.modelId, request.reasoning?.ifBlank { null })
+		})
 	}
 
 	fun selectModel(modelId: String) {
-		val chatId = activeChatId.value ?: return
+		val chatId = activeChatId.value
+		if (chatId == null) {
+			_uiState.update { it.copy(pendingModelId = modelId) }
+			return
+		}
 		viewModelScope.launch {
 			try {
 				chatRepository.updateChatModel(chatId, modelId)
@@ -107,6 +104,14 @@ class ChatViewModel @Inject constructor(
 
 	fun clearError() {
 		_uiState.update { it.copy(chatErrorMessage = null) }
+	}
+
+	fun consumePaywall() {
+		_uiState.update { it.copy(showPaywall = false) }
+	}
+
+	fun consumeSignIn() {
+		_uiState.update { it.copy(showSignIn = false) }
 	}
 
 	fun clearModelsError() {
@@ -131,6 +136,7 @@ class ChatViewModel @Inject constructor(
 		val title = content.lines().firstOrNull().orEmpty().take(48).ifBlank { "New chat" }
 		val chat = chatRepository.createChat(title, modelId)
 		activeChatId.value = chat.id
+		_uiState.update { it.copy(pendingModelId = null) }
 		return chat.id
 	}
 
@@ -146,20 +152,37 @@ class ChatViewModel @Inject constructor(
 						}
 						stopStreaming()
 					}
-					is Outcome.Err -> stopStreaming(chatErrorMessage(result.error))
+					is Outcome.Err -> stopStreaming(result.error)
 				}
 			} catch (error: CancellationException) {
 				stopStreaming()
 				throw error
 			} catch (error: Exception) {
 				log("chat stream failed: $error")
-				stopStreaming(chatErrorMessage(error))
+				val chatError = (error as? ChatStreamException)?.error
+				if (chatError != null) stopStreaming(chatError) else stopStreaming(error)
 			}
 		}
 	}
 
 	private fun stopStreaming(message: String? = null) {
 		_uiState.update { it.copy(isSending = false, streamingText = "", chatErrorMessage = message) }
+	}
+
+	private fun stopStreaming(error: ChatError) {
+		when (error) {
+			ChatError.OutOfCredits -> _uiState.update {
+				it.copy(isSending = false, streamingText = "", chatErrorMessage = null, showPaywall = true)
+			}
+			ChatError.Unauthorized -> _uiState.update {
+				it.copy(isSending = false, streamingText = "", chatErrorMessage = null, showSignIn = true)
+			}
+			else -> stopStreaming(chatErrorMessage(error))
+		}
+	}
+
+	private fun stopStreaming(error: Exception) {
+		stopStreaming(chatErrorMessage(error))
 	}
 
 	private fun chatErrorMessage(error: ChatError): String = when (error) {
