@@ -86,6 +86,7 @@ fun AppNavDisplay(
 					onBack = { backStack.popSafely() },
 					onChatSelected = { chatId -> backStack.add(ChatDetail(chatId)) },
 					onOpenSettings = { backStack.add(Settings) },
+					onNewChat = { backStack.add(ChatDetail(null)) },
 				)
 			}
 			entry<Settings> {

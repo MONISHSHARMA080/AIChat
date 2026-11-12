@@ -5,10 +5,14 @@ import android.content.res.Configuration
 import android.text.format.DateUtils
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.consumeWindowInsets
@@ -22,10 +26,12 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -39,6 +45,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -68,6 +76,16 @@ private fun rememberDummyChats(): List<ChatListEntry> = remember {
 			dummyChat("c-trip", "Weekend trip", now - TimeUnit.HOURS.toMillis(3), isPinned = true, modelId = "spark-reasoner"),
 			dummyChat("c-recipes", "Smoothie recipes", now - TimeUnit.HOURS.toMillis(26)),
 			dummyChat("c-rent", "Apartment hunt", now - TimeUnit.HOURS.toMillis(30), modelId = "spark-1-mini"),
+			dummyChat("ca-gy", "Gym plan", now - TimeUnit.DAYS.toMillis(2)),
+			dummyChat("cb-ehjb gym", "Gym plan", now - TimeUnit.DAYS.toMillis(2)),
+			dummyChat("cd-gkicjbeym", "Gym plan", now - TimeUnit.DAYS.toMillis(2)),
+			dummyChat("ce-g9m", "Gym plan", now - TimeUnit.DAYS.toMillis(2)),
+			dummyChat("cw-gy9m", "Gym plan", now - TimeUnit.DAYS.toMillis(2)),
+			dummyChat("ca-gy9m", "Gym plan", now - TimeUnit.DAYS.toMillis(2)),
+			dummyChat("cb-gymub", "Gym plan", now - TimeUnit.DAYS.toMillis(2)),
+			dummyChat("cd-7gym", "Gym plan", now - TimeUnit.DAYS.toMillis(2)),
+			dummyChat("ce-gnym", "Gym plan", now - TimeUnit.DAYS.toMillis(2)),
+			dummyChat("cw-gy23m", "Gym plan", now - TimeUnit.DAYS.toMillis(2)),
 			dummyChat("c-gym", "Gym plan", now - TimeUnit.DAYS.toMillis(2)),
 			dummyChat("c-thesis", "Thesis outline", now - TimeUnit.DAYS.toMillis(4), modelId = "spark-reasoner"),
 			dummyChat("c-plants", "Plant care", now - TimeUnit.DAYS.toMillis(6), modelId = "spark-1-mini"),
@@ -101,6 +119,7 @@ fun ChatListScreen(
 		onBack: () -> Unit = {},
 		onChatSelected: (String) -> Unit = {},
 		onOpenSettings: () -> Unit = {},
+		onNewChat: () -> Unit = {},
 ) {
 	val chats = rememberDummyChats()
 	val pinned = remember(chats) { chats.filter { it.isPinned } }
@@ -125,25 +144,22 @@ fun ChatListScreen(
 				scrollBehavior = topBarScrollBehavior,
 			)
 		},
-		floatingActionButton = {
-			FloatingActionButton(onClick = onOpenSettings) {
-				Icon(Icons.Outlined.Settings, contentDescription = "Settings")
-			}
-		},
 	) { padding ->
 		val layoutDirection = LocalLayoutDirection.current
-		LazyColumn(
-			modifier = Modifier
-				.fillMaxSize()
-				.consumeWindowInsets(padding),
-			contentPadding = PaddingValues(
-				start = padding.calculateStartPadding(layoutDirection) + 16.dp,
-				end = padding.calculateEndPadding(layoutDirection) + 16.dp,
-				top = padding.calculateTopPadding(),
-				bottom = padding.calculateBottomPadding() + 72.dp,
-			),
-		) {
-			if (pinned.isNotEmpty()) {
+		val scheme = MaterialTheme.colorScheme
+		Box(modifier = Modifier.fillMaxSize()) {
+			LazyColumn(
+				modifier = Modifier
+					.fillMaxSize()
+					.consumeWindowInsets(padding),
+				contentPadding = PaddingValues(
+					start = padding.calculateStartPadding(layoutDirection) + 16.dp,
+					end = padding.calculateEndPadding(layoutDirection) + 16.dp,
+					top = padding.calculateTopPadding(),
+					bottom = padding.calculateBottomPadding() + 112.dp,
+				),
+			) {
+				if (pinned.isNotEmpty()) {
 				item(key = "pinned-header") {
 					SectionHeader(
 						title = "Pinned",
@@ -175,6 +191,41 @@ fun ChatListScreen(
 						modifier = Modifier.animateItem(),
 					)
 				}
+			}
+			}
+			Box(
+				modifier = Modifier
+					.align(Alignment.BottomCenter)
+					.fillMaxWidth()
+					.height(152.dp)
+					.background(
+						Brush.verticalGradient(
+							listOf(
+								Color.Transparent,
+								scheme.surface,
+							),
+						),
+					),
+			)
+			Row(
+				horizontalArrangement = Arrangement.SpaceBetween,
+				verticalAlignment = Alignment.CenterVertically,
+				modifier = Modifier
+					.align(Alignment.BottomCenter)
+					.fillMaxWidth()
+					.navigationBarsPadding()
+					.padding(start = 16.dp, end = 16.dp, bottom = 16.dp),
+			) {
+				FloatingActionButton(onClick = onOpenSettings) {
+					Icon(Icons.Outlined.Settings, contentDescription = "Settings")
+				}
+				ExtendedFloatingActionButton(
+					onClick = onNewChat,
+					icon = {
+						Icon(Icons.Filled.Add, contentDescription = null)
+					},
+					text = { Text(text = "New chat") },
+				)
 			}
 		}
 	}
