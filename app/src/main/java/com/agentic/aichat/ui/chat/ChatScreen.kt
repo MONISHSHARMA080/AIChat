@@ -254,7 +254,7 @@ private fun ChatScreenContent(
 						start = LIST_SIDE_PADDING,
 						end = LIST_SIDE_PADDING,
 						top = 8.dp,
-						bottom = (if (composerHeightPx > 0f) with(density) { composerHeightPx.toDp() } else 84.dp) + 8.dp + with(density) { sendRevealBottomPx.toDp() } + 20.dp + with(density) { bottomInsetPx.toDp() },
+						bottom = (if (composerHeightPx > 0f) with(density) { composerHeightPx.toDp() } else 84.dp) + 8.dp + with(density) { sendRevealBottomPx.toDp() } + 32.dp + with(density) { bottomInsetPx.toDp() },
 					),
 					verticalArrangement = Arrangement.spacedBy(2.dp),
 					userScrollEnabled = flights.isEmpty(),
@@ -288,6 +288,23 @@ private fun ChatScreenContent(
 						)
 					}
 				}
+			}
+			if (selectedModel != null || models.isEmpty()) {
+				Box(
+					modifier = Modifier
+						.align(Alignment.BottomCenter)
+						.fillMaxWidth()
+						.height(112.dp)
+						.background(
+							Brush.verticalGradient(
+								listOf(
+									Color.Transparent,
+									scheme.surface.copy(alpha = 0.55f),
+									scheme.surface.copy(alpha = 0.92f),
+								),
+							),
+						),
+				)
 			}
 			if (selectedModel != null) {
 				ChatComposer(
@@ -339,7 +356,7 @@ private fun ChatScreenContent(
 					},
 					modifier = Modifier
 						.align(Alignment.BottomCenter)
-						.padding(start = 12.dp, end = 12.dp, bottom = 8.dp)
+						.padding(start = 12.dp, end = 12.dp, bottom = 0.dp)
 						.windowInsetsPadding(bottomInsets)
 						.onGloballyPositioned {
 							composerBounds.composer = it.rectInRoot()
@@ -353,7 +370,7 @@ private fun ChatScreenContent(
 					onRetry = onRetryModels,
 					modifier = Modifier
 						.align(Alignment.BottomCenter)
-						.padding(start = 12.dp, end = 12.dp, bottom = 8.dp)
+						.padding(start = 12.dp, end = 12.dp, bottom = 0.dp)
 						.windowInsetsPadding(bottomInsets),
 				)
 			}
