@@ -15,3 +15,7 @@ export const REVENUECAT_PROJECT_ID = defineString("REVENUECAT_PROJECT_ID", {
 export const REVENUECAT_COIN_CODE = defineString("REVENUECAT_COIN_CODE", {
   default: "COIN",
 });
+
+export const TURSO_DATABASE_URL = defineSecret("TURSO_DATABASE_URL");
+
+export const TURSO_AUTH_TOKEN = defineSecret("TURSO_AUTH_TOKEN");

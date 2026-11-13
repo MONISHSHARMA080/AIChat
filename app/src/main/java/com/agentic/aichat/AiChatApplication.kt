@@ -61,7 +61,7 @@ class AiChatApplication : Application() {
 		if (Purchases.sharedInstance.appUserID == uid) return
 		Purchases.sharedInstance.logIn(uid, object : LogInCallback {
 			override fun onReceived(customerInfo: CustomerInfo, created: Boolean) {
-				log("RevenueCat login completed created=$created")
+				log("RevenueCat login completed created=$created and the uid was $uid")
 			}
 
 			override fun onError(error: PurchasesError) {

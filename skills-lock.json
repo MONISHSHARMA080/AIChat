@@ -1,17 +1,29 @@
 {
-  "version": 1,
+  "version": 2,
   "skills": {
     "ai-gateway": {
       "source": "vercel/vercel-plugin",
       "sourceType": "github",
       "skillPath": "skills/ai-gateway/SKILL.md",
-      "computedHash": "2825ef76df8a32be7f592b8d9af68042ccfea152706867b6f84aad55596ba0dc"
+      "computedHash": "818998daae6aa8e3095fd88456e2770becbd82c808d5768adea6b7334a5c7937"
     },
     "ai-sdk": {
       "source": "vercel/ai",
       "sourceType": "github",
       "skillPath": "skills/use-ai-sdk/SKILL.md",
-      "computedHash": "d6910e7d8bb527d2823ba58b6225b304ae649c135fc7e43ec2d2152251c218db"
+      "computedHash": "59cd2dc82c5458f2819992fc3d27204ed16edfc9170870c6f8f04c44bac17772"
+    },
+    "turso-cloud": {
+      "source": "tursodatabase/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/turso-cloud/SKILL.md",
+      "computedHash": "f8f4c26dd49551b1459694580b2a16d157b5d7edb8b0a8779282ee71ed93080d"
+    },
+    "turso-db": {
+      "source": "tursodatabase/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/turso-db/SKILL.md",
+      "computedHash": "608a5607c59d81d1f0512bade0dea0edc6ad56fdaffbd5eadffa0d1677947530"
     }
   }
 }

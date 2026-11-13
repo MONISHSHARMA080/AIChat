@@ -6,6 +6,7 @@ import { streamText } from "ai";
 import { z } from "zod";
 import { AI_GATEWAY_API_KEY, REVENUECAT_COIN_CODE, REVENUECAT_SECRET_API_KEY } from "../config";
 import { fetchModels, getGateway } from "./listModels";
+import { deleteChatRow, getChatRow, insertChatRow, insertMessageRow, listChatRows, listMessageRows, touchChatLastMessage, type ChatRow, type MessageRow } from "../db/turso";
 
 if (!getApps().length) initializeApp();
 
@@ -70,12 +71,10 @@ const bodySchema = z.object({
 
 type Body = z.infer<typeof bodySchema>;
 
-// Used twice (balance lookup + deduction response).
 const coinBalancesSchema = z.object({
   items: z.array(z.object({ currency_code: z.string(), balance: z.number() })),
 });
 
-// Used twice (balance lookup + deduction response).
 function parseCoinBalance(payload: unknown, errorMessage: string): number {
   const parsedBalances = coinBalancesSchema.safeParse(payload);
   if (!parsedBalances.success) throw new HttpsError("unavailable", errorMessage);
@@ -85,7 +84,6 @@ function parseCoinBalance(payload: unknown, errorMessage: string): number {
   return coinBalance?.balance ?? 0;
 }
 
-// Used twice (before the request, and when the charge is 0 coins).
 async function getUserCoinBalance(uid: string, revenueCatProjectId: string): Promise<number> {
   const res = await fetch(
     `${REVENUECAT_BASE_URL}/projects/${revenueCatProjectId}/customers/${encodeURIComponent(uid)}/virtual_currencies`,
@@ -131,7 +129,6 @@ export const chat = onCall(
     const uid = request.auth.uid;
     logger.info(`chat request `, { auth: request.auth, data: request.data });
 
-    // --- env ---
     const parsedEnv = z
       .object({
         USD_PER_COIN: z.coerce.number().positive(),
@@ -175,7 +172,6 @@ export const chat = onCall(
       throw new HttpsError("invalid-argument", `reasoning must be one of: ${allowedLevels}`);
     }
     const modelPricing = model.pricing;
-    // --- low credit check ---
     const totalChars = body.messages.reduce((total, message) => {
       const contentChars =
         typeof message.content === "string"
@@ -196,10 +192,6 @@ export const chat = onCall(
     if (userCoinBalance * usdPerCoin < estimatedInputUsd) {
       throw new HttpsError("resource-exhausted", "insufficient credits");
     }
-    // --- stream the model response ---
-    // Streaming clients (SDK `.stream()`) get chunks via sendChunk and the final
-    // result is just billing info. Non-streaming clients (SDK `.call()`) get the
-    // full text in the callable result instead, since sendChunk would be a no-op.
     const clientStreams = request.acceptsStreaming;
     const streamErrors: unknown[] = [];
     const result = streamText({
@@ -242,7 +234,6 @@ export const chat = onCall(
     }
     const gatewayCostUsd = parsedCost.data.gateway.cost;
 
-    // --- charge coins (failure here must not fail the chat) ---
     const coinsToCharge = Math.ceil(Number((gatewayCostUsd / usdPerCoin).toFixed(7)));
     let chargedCoins = 0;
     let balanceAfterCharge = userCoinBalance;
@@ -274,8 +265,6 @@ export const chat = onCall(
           "unexpected deduction response",
         );
         chargedCoins = coinsToCharge;
-        // console.log(`gatewayCostUsd:${gatewayCostUsd}, coinsToCharge:${coinsToCharge}, balanceBeforeCharge:${userCoinBalance},   `);
-
       }
     } catch (error) {
       logger.error("deduction failed after successful chat", {
@@ -288,8 +277,6 @@ export const chat = onCall(
       balanceAfterCharge = userCoinBalance;
     }
 
-    // Streaming: text already delivered as chunks, so return billing only.
-    // Non-streaming: include the full text so `.call()` clients get the reply.
     return clientStreams
       ? { charged: chargedCoins, balance: balanceAfterCharge }
       : { text: fullText, charged: chargedCoins, balance: balanceAfterCharge };

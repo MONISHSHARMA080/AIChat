@@ -5,7 +5,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.agentic.aichat.data.auth.AuthRepository
 import com.agentic.aichat.data.auth.GoogleSignInResult
+import com.agentic.aichat.data.auth.UserSyncRepository
+import com.agentic.aichat.util.log
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -22,6 +25,7 @@ sealed interface SignInUiState {
 @HiltViewModel
 class SignInViewModel @Inject constructor(
 	private val authRepository: AuthRepository,
+	private val userSyncRepository: UserSyncRepository,
 ) : ViewModel() {
 	private val _uiState = MutableStateFlow<SignInUiState>(SignInUiState.Idle)
 	val uiState: StateFlow<SignInUiState> = _uiState.asStateFlow()
@@ -38,7 +42,16 @@ class SignInViewModel @Inject constructor(
 					_uiState.value = SignInUiState.Error("Sign-in was interrupted, please try again")
 				is GoogleSignInResult.Failed ->
 					_uiState.value = SignInUiState.Error(result.cause.message ?: "Google sign-in failed")
-				is GoogleSignInResult.Success -> _uiState.value = SignInUiState.Success
+				is GoogleSignInResult.Success -> {
+					try {
+						userSyncRepository.syncUser()
+					} catch (error: CancellationException) {
+						throw error
+					} catch (error: Exception) {
+						log("syncUser callable failed: ${error.message}")
+					}
+					_uiState.value = SignInUiState.Success
+				}
 			}
 		}
 	}
