@@ -31,13 +31,17 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.exclude
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -199,6 +203,9 @@ private fun ChatScreenContent(
 	var sendRevealBottomPx by remember { mutableFloatStateOf(0f) }
 	var composerHeightPx by remember { mutableFloatStateOf(0f) }
 	val imeBottomPx = WindowInsets.ime.getBottom(density)
+	val navigationBottomPx = WindowInsets.navigationBars.getBottom(density)
+	val bottomInsetPx = maxOf(imeBottomPx, navigationBottomPx)
+	val bottomInsets = WindowInsets.ime.union(WindowInsets.navigationBars)
 	LaunchedEffect(imeBottomPx) {
 		if (imeBottomPx == 0) sendRevealBottomPx = 0f
 	}
@@ -211,6 +218,7 @@ private fun ChatScreenContent(
 	Scaffold(
 		modifier = modifier.fillMaxSize(),
 		containerColor = scheme.surface,
+		contentWindowInsets = WindowInsets.systemBars.exclude(WindowInsets.navigationBars),
 		topBar = {
 			CenterAlignedTopAppBar(
 				title = {
@@ -246,7 +254,7 @@ private fun ChatScreenContent(
 						start = LIST_SIDE_PADDING,
 						end = LIST_SIDE_PADDING,
 						top = 8.dp,
-						bottom = (if (composerHeightPx > 0f) with(density) { composerHeightPx.toDp() } else 84.dp) + 8.dp + with(density) { sendRevealBottomPx.toDp() } + 20.dp,
+						bottom = (if (composerHeightPx > 0f) with(density) { composerHeightPx.toDp() } else 84.dp) + 8.dp + with(density) { sendRevealBottomPx.toDp() } + 20.dp + with(density) { bottomInsetPx.toDp() },
 					),
 					verticalArrangement = Arrangement.spacedBy(2.dp),
 					userScrollEnabled = flights.isEmpty(),
@@ -332,10 +340,10 @@ private fun ChatScreenContent(
 					modifier = Modifier
 						.align(Alignment.BottomCenter)
 						.padding(start = 12.dp, end = 12.dp, bottom = 8.dp)
-						.imePadding()
+						.windowInsetsPadding(bottomInsets)
 						.onGloballyPositioned {
 							composerBounds.composer = it.rectInRoot()
-							val contentHeightPx = (it.size.height - imeBottomPx).coerceAtLeast(0).toFloat()
+							val contentHeightPx = (it.size.height - bottomInsetPx).coerceAtLeast(0).toFloat()
 							if (contentHeightPx != composerHeightPx) composerHeightPx = contentHeightPx
 						},
 				)
@@ -345,7 +353,8 @@ private fun ChatScreenContent(
 					onRetry = onRetryModels,
 					modifier = Modifier
 						.align(Alignment.BottomCenter)
-						.padding(start = 12.dp, end = 12.dp, bottom = 8.dp),
+						.padding(start = 12.dp, end = 12.dp, bottom = 8.dp)
+						.windowInsetsPadding(bottomInsets),
 				)
 			}
 			if (state.chatErrorMessage != null) {
