@@ -52,6 +52,13 @@ class ChatViewModel @Inject constructor(
 				_uiState.update { it.copy(messages = messages) }
 			}
 		}
+		viewModelScope.launch {
+			chatRepository.observeSyncedChatId().collect { syncedId ->
+				if (syncedId != null && syncedId != activeChatId.value) {
+					activeChatId.value = syncedId
+				}
+			}
+		}
 		refreshModels()
 	}
 
@@ -69,9 +76,11 @@ class ChatViewModel @Inject constructor(
 			_uiState.update { it.copy(showSignIn = true) }
 			return
 		}
+		if (activeChatId.value == null) {
+			_uiState.update { it.copy(pendingModelId = null) }
+		}
 		runStream(next = {
-			val chatId = activeChatId.value ?: createChat(content, request.modelId)
-			chatRepository.sendMessage(chatId, request.messageId, content, request.modelId, request.reasoning?.ifBlank { null })
+			chatRepository.sendMessage(activeChatId.value, request.messageId, content, request.modelId, request.reasoning?.ifBlank { null })
 		})
 	}
 
@@ -117,10 +126,6 @@ class ChatViewModel @Inject constructor(
 		_uiState.update { it.copy(showSignIn = false) }
 	}
 
-	fun clearModelsError() {
-		_uiState.update { it.copy(modelsErrorMessage = null) }
-	}
-
 	fun refreshModels() {
 		modelsJob?.cancel()
 		_uiState.update { it.copy(isLoading = true, modelsErrorMessage = null) }
@@ -133,14 +138,6 @@ class ChatViewModel @Inject constructor(
 					_uiState.update { it.copy(isLoading = false, modelsErrorMessage = "Could not load models. Please try again.") }
 				}
 		}
-	}
-
-	private suspend fun createChat(content: String, modelId: String): String {
-		val title = content.lines().firstOrNull().orEmpty().take(48).ifBlank { "New chat" }
-		val chat = chatRepository.createChat(title, modelId)
-		activeChatId.value = chat.id
-		_uiState.update { it.copy(pendingModelId = null) }
-		return chat.id
 	}
 
 	private fun runStream(next: suspend () -> Outcome<Flow<String>, ChatError>) {

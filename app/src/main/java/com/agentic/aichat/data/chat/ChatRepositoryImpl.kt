@@ -23,6 +23,9 @@ import javax.inject.Singleton
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -39,6 +42,10 @@ class ChatRepositoryImpl @Inject constructor(
 	private val messageDao: MessageDao,
 ) : ChatRepository {
 
+	private val syncedChatId = MutableStateFlow<String?>(null)
+
+	override fun observeSyncedChatId(): StateFlow<String?> = syncedChatId.asStateFlow()
+
 	override fun getAllChats(): Flow<List<ChatEntity>> = chatDao.observeAll()
 
 	override fun observeChat(chatId: String): Flow<ChatEntity?> = chatDao.observeById(chatId)
@@ -46,43 +53,10 @@ class ChatRepositoryImpl @Inject constructor(
 	override fun observeMessages(chatId: String): Flow<List<MessageEntity>> =
 		messageDao.observeForChat(chatId)
 
-	override suspend fun getMessages(chatId: String): List<MessageEntity> =
-		messageDao.getForChat(chatId)
-
-	override suspend fun createChat(title: String, modelId: String): ChatEntity {
-		val now = System.currentTimeMillis()
-		val chat = ChatEntity(
-			id = UUID.randomUUID().toString(),
-			title = title,
-			modelId = modelId,
-			createdAt = now,
-			updatedAt = now,
-			lastMessageText = null,
-			lastMessageAt = null,
-		)
-		chatDao.insert(chat)
-		return chat
-	}
-
-	override suspend fun renameChat(chatId: String, title: String) = chatDao.rename(chatId, title)
-
 	override suspend fun updateChatModel(chatId: String, modelId: String) = chatDao.updateModel(chatId, modelId)
 
-	override suspend fun deleteChat(chatId: String) = chatDao.deleteById(chatId)
-
-	override suspend fun addMessage(message: MessageEntity) {
-		database.withWriteTransaction {
-			messageDao.insert(message)
-			chatDao.updateLastMessage(message.chatId, message.content, message.createdAt)
-		}
-	}
-
-	override suspend fun updateMessageStatus(messageId: String, status: MessageStatus) = messageDao.updateStatus(messageId, status)
-
-	override suspend fun deleteMessage(messageId: String) = messageDao.deleteById(messageId)
-
 	override suspend fun sendMessage(
-		chatId: String,
+		chatId: String?,
 		messageId: String,
 		text: String,
 		modelId: String,
@@ -90,28 +64,33 @@ class ChatRepositoryImpl @Inject constructor(
 		attachments: List<ChatAttachment>,
 	): Outcome<Flow<String>, ChatError> = withContext(Dispatchers.IO) {
 		val now = System.currentTimeMillis()
+		val resolvedTitle = deriveTitle(text)
 		val userMessage = MessageEntity(
 			id = messageId,
-			chatId = chatId,
+			chatId = chatId.orEmpty(),
 			role = MessageRole.USER,
 			content = text,
 			createdAt = now,
 			status = MessageStatus.DONE,
 			attachments = attachments,
 		)
-		val payload = when (val built = buildPayload(messageDao.getForChat(chatId) + userMessage, modelId, reasoning)) {
+		val payload = when (val built = buildPayload(text, attachments, modelId, reasoning, chatId, resolvedTitle)) {
 			is Outcome.Ok -> built.value
 			is Outcome.Err -> return@withContext Outcome.Err(ChatError.AttachmentUnreadable(built.error))
 		}
-		val preview = text.ifBlank { attachments.firstOrNull()?.name.orEmpty() }
-		database.withWriteTransaction {
-			messageDao.insert(userMessage)
-			chatDao.updateLastMessage(chatId, preview, now)
+		val localChatId = chatId
+		if (localChatId != null) {
+			val preview = text.ifBlank { attachments.firstOrNull()?.name.orEmpty() }
+			database.withWriteTransaction {
+				messageDao.insert(userMessage)
+				chatDao.updateLastMessage(localChatId, preview, now)
+			}
 		}
 		val replyId = UUID.randomUUID().toString()
 		Outcome.Ok(
-			writeReplyFlow(streamChat(payload)) { content ->
-				writeAssistantMessage(chatId, replyId, content)
+			writeReplyFlow(streamChat(payload)) { serverChatId, content ->
+				val effectiveServerId = serverChatId ?: localChatId ?: UUID.randomUUID().toString()
+				adoptServerChatId(localChatId, effectiveServerId, resolvedTitle, modelId, userMessage, replyId, content, now)
 			},
 		)
 	}
@@ -122,78 +101,162 @@ class ChatRepositoryImpl @Inject constructor(
 		modelId: String,
 		reasoning: String?,
 	): Outcome<Flow<String>, ChatError> = withContext(Dispatchers.IO) {
-		val history = messageDao.getForChat(chatId).filterNot { it.id == messageId }
-		val payload = when (val built = buildPayload(history, modelId, reasoning)) {
+		val retriedMessage = messageDao.getForChat(chatId).find { it.id == messageId }
+		val chatTitle = chatDao.getById(chatId)?.title
+		val payload = when (val built = buildPayload(retriedMessage?.content.orEmpty(), retriedMessage?.attachments ?: emptyList(), modelId, reasoning, chatId, chatTitle)) {
 			is Outcome.Ok -> built.value
 			is Outcome.Err -> return@withContext Outcome.Err(ChatError.AttachmentUnreadable(built.error))
 		}
+		val existingTitle = chatTitle ?: "New chat"
 		Outcome.Ok(
-			writeReplyFlow(streamChat(payload)) { content ->
-				database.withWriteTransaction {
-					messageDao.updateContent(messageId, content)
-					messageDao.updateStatus(messageId, MessageStatus.DONE)
-					chatDao.updateLastMessage(chatId, content, System.currentTimeMillis())
-				}
+			writeReplyFlow(streamChat(payload)) { serverChatId, content ->
+				adoptRetryResult(chatId, serverChatId, messageId, existingTitle, modelId, content)
 			},
 		)
 	}
 
-	private suspend fun writeAssistantMessage(
-		chatId: String,
-		messageId: String,
-		content: String,
+	private suspend fun adoptServerChatId(
+		localChatId: String?,
+		serverChatId: String,
+		title: String,
+		modelId: String,
+		userMessage: MessageEntity,
+		replyId: String,
+		assistantContent: String,
+		now: Long,
 	) {
-		val now = System.currentTimeMillis()
 		database.withWriteTransaction {
-			messageDao.insert(
-				MessageEntity(
-					id = messageId,
-					chatId = chatId,
-					role = MessageRole.ASSISTANT,
-					content = content,
-					createdAt = now,
-					status = MessageStatus.DONE,
-				),
-			)
-			chatDao.updateLastMessage(chatId, content, now)
+			when {
+				localChatId == null -> {
+					if (chatDao.getById(serverChatId) == null) {
+						chatDao.insert(
+							ChatEntity(
+								id = serverChatId,
+								title = title,
+								modelId = modelId,
+								createdAt = now,
+								updatedAt = now,
+								lastMessageText = assistantContent,
+								lastMessageAt = now,
+							),
+						)
+					}
+					messageDao.insert(userMessage.copy(chatId = serverChatId))
+					messageDao.insert(assistantMessageOf(replyId, serverChatId, assistantContent, now))
+				}
+				localChatId != serverChatId -> {
+					migrateChatId(localChatId, serverChatId, title, modelId, assistantContent, now)
+					messageDao.insert(assistantMessageOf(replyId, serverChatId, assistantContent, now))
+				}
+				else -> {
+					messageDao.insert(assistantMessageOf(replyId, serverChatId, assistantContent, now))
+					chatDao.updateLastMessage(serverChatId, assistantContent, now)
+				}
+			}
 		}
+		syncedChatId.value = serverChatId
 	}
 
+	private suspend fun adoptRetryResult(
+		localChatId: String,
+		serverChatId: String?,
+		messageId: String,
+		title: String,
+		modelId: String,
+		assistantContent: String,
+	) {
+		val now = System.currentTimeMillis()
+		val targetId = serverChatId ?: localChatId
+		database.withWriteTransaction {
+			if (targetId != localChatId) {
+				migrateChatId(localChatId, targetId, title, modelId, assistantContent, now)
+			}
+			messageDao.updateContent(messageId, assistantContent)
+			messageDao.updateStatus(messageId, MessageStatus.DONE)
+			chatDao.updateLastMessage(targetId, assistantContent, now)
+		}
+		syncedChatId.value = targetId
+	}
+
+	private suspend fun migrateChatId(
+		localChatId: String,
+		serverChatId: String,
+		title: String,
+		modelId: String,
+		assistantContent: String,
+		now: Long,
+	) {
+		if (chatDao.getById(serverChatId) == null) {
+			val oldChat = chatDao.getById(localChatId)
+			chatDao.insert(
+				ChatEntity(
+					id = serverChatId,
+					title = oldChat?.title ?: title,
+					modelId = oldChat?.modelId ?: modelId,
+					createdAt = oldChat?.createdAt ?: now,
+					updatedAt = now,
+					lastMessageText = assistantContent,
+					lastMessageAt = now,
+				),
+			)
+		}
+		messageDao.moveToChat(localChatId, serverChatId)
+		chatDao.deleteById(localChatId)
+	}
+
+	private fun assistantMessageOf(
+		replyId: String,
+		chatId: String,
+		assistantContent: String,
+		now: Long,
+	): MessageEntity = MessageEntity(
+		id = replyId,
+		chatId = chatId,
+		role = MessageRole.ASSISTANT,
+		content = assistantContent,
+		createdAt = now,
+		status = MessageStatus.DONE,
+	)
+
+	private fun deriveTitle(text: String): String =
+		text.lines().firstOrNull().orEmpty().take(48).ifBlank { "New chat" }
+
 	private fun buildPayload(
-		history: List<MessageEntity>,
+		text: String,
+		attachments: List<ChatAttachment>,
 		modelId: String,
 		reasoning: String?,
+		chatId: String?,
+		title: String?,
 	): Outcome<Map<String, Any?>, String> {
-		val messages = history.map { message ->
-			val files = message.attachments.map { attachment ->
-				val bytes = readAttachmentBytes(attachment) ?: return Outcome.Err(attachment.name)
-				mapOf(
-					"name" to attachment.name,
-					"mimeType" to attachment.mimeType,
-					"data" to Base64.encodeToString(bytes, Base64.NO_WRAP),
-				)
-			}
+		val files = attachments.map { attachment ->
+			val bytes = readAttachmentBytes(attachment) ?: return Outcome.Err(attachment.name)
 			mapOf(
-				"role" to message.role.name.lowercase(),
-				"content" to message.content,
-				"attachments" to files,
+				"name" to attachment.name,
+				"mimeType" to attachment.mimeType,
+				"data" to Base64.encodeToString(bytes, Base64.NO_WRAP),
 			)
 		}
 		val payload = mutableMapOf<String, Any?>(
 			"model" to modelId,
-			"messages" to messages,
+			"chatId" to chatId,
+			"title" to title,
+			"message" to mapOf(
+				"content" to text,
+				"attachments" to files,
+			),
 		)
 		reasoning?.ifBlank { null }?.let { payload["reasoning"] = it }
 		return Outcome.Ok(payload)
 	}
 
-	private fun streamChat(payload: Map<String, Any?>): Flow<String> = functions.getHttpsCallable("chat")
+	private fun streamChat(payload: Map<String, Any?>): Flow<StreamEvent> = functions.getHttpsCallable("chat")
 		.stream(payload)
 		.asFlow()
 		.mapNotNull { response ->
 			when (response) {
-				is StreamResponse.Message -> parseReplyText(response.message.data)
-				is StreamResponse.Result -> null
+				is StreamResponse.Message -> parseReplyText(response.message.data)?.let(StreamEvent::Token)
+				is StreamResponse.Result -> StreamEvent.Done(parseResultChatId(response.result.data))
 				else -> null
 			}
 		}
@@ -210,16 +273,27 @@ class ChatRepositoryImpl @Inject constructor(
 		return raw.toString().ifEmpty { null }
 	}
 
+	private fun parseResultChatId(raw: Any?): String? {
+		if (raw !is Map<*, *>) return null
+		return raw["chatId"]?.toString()?.ifEmpty { null }
+	}
+
 	private fun writeReplyFlow(
-		upstream: Flow<String>,
-		onComplete: suspend (String) -> Unit,
+		upstream: Flow<StreamEvent>,
+		onComplete: suspend (String?, String) -> Unit,
 	): Flow<String> = flow {
 		val content = StringBuilder()
-		upstream.collect { token ->
-			content.append(token)
-			emit(token)
+		var serverChatId: String? = null
+		upstream.collect { event ->
+			when (event) {
+				is StreamEvent.Token -> {
+					content.append(event.text)
+					emit(event.text)
+				}
+				is StreamEvent.Done -> serverChatId = event.chatId
+			}
 		}
-		onComplete(content.toString())
+		onComplete(serverChatId, content.toString())
 	}.flowOn(Dispatchers.IO)
 
 	private fun mapHttpsError(error: FirebaseFunctionsException): ChatError {
@@ -240,4 +314,9 @@ class ChatRepositoryImpl @Inject constructor(
 		} catch (e: Exception) {
 			null
 		}
+
+	private sealed interface StreamEvent {
+		data class Token(val text: String) : StreamEvent
+		data class Done(val chatId: String?) : StreamEvent
+	}
 }
