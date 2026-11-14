@@ -17,11 +17,18 @@ data class RetryRequest(
 	val reasoning: String?,
 )
 
+data class PendingMessage(
+	val id: String,
+	val text: String,
+	val chatId: String?,
+)
+
 data class ChatUiState(
 	val chat: ChatEntity? = null,
 	val pendingModelId: String? = null,
 	val messages: List<MessageEntity> = emptyList(),
-	val streamingText: String = "",
+	val pendingMessages: List<PendingMessage> = emptyList(),
+	val streamingByMessageId: Map<String, String> = emptyMap(),
 	val models: List<ModelDto> = emptyList(),
 	val isLoading: Boolean = false,
 	val isSending: Boolean = false,

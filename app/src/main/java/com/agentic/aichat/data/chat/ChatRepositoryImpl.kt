@@ -78,19 +78,11 @@ class ChatRepositoryImpl @Inject constructor(
 			is Outcome.Ok -> built.value
 			is Outcome.Err -> return@withContext Outcome.Err(ChatError.AttachmentUnreadable(built.error))
 		}
-		val localChatId = chatId
-		if (localChatId != null) {
-			val preview = text.ifBlank { attachments.firstOrNull()?.name.orEmpty() }
-			database.withWriteTransaction {
-				messageDao.insert(userMessage)
-				chatDao.updateLastMessage(localChatId, preview, now)
-			}
-		}
 		val replyId = UUID.randomUUID().toString()
 		Outcome.Ok(
 			writeReplyFlow(streamChat(payload)) { serverChatId, content ->
-				val effectiveServerId = serverChatId ?: localChatId ?: UUID.randomUUID().toString()
-				adoptServerChatId(localChatId, effectiveServerId, resolvedTitle, modelId, userMessage, replyId, content, now)
+				val effectiveServerId = serverChatId ?: chatId ?: UUID.randomUUID().toString()
+				adoptServerChatId(chatId, effectiveServerId, resolvedTitle, modelId, userMessage, replyId, content, now)
 			},
 		)
 	}
@@ -146,9 +138,11 @@ class ChatRepositoryImpl @Inject constructor(
 				}
 				localChatId != serverChatId -> {
 					migrateChatId(localChatId, serverChatId, title, modelId, assistantContent, now)
+					messageDao.insert(userMessage.copy(chatId = serverChatId))
 					messageDao.insert(assistantMessageOf(replyId, serverChatId, assistantContent, now))
 				}
 				else -> {
+					messageDao.insert(userMessage.copy(chatId = serverChatId))
 					messageDao.insert(assistantMessageOf(replyId, serverChatId, assistantContent, now))
 					chatDao.updateLastMessage(serverChatId, assistantContent, now)
 				}

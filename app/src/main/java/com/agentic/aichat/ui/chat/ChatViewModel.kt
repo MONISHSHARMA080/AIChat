@@ -34,7 +34,7 @@ class ChatViewModel @Inject constructor(
 	val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
 	private val activeChatId = MutableStateFlow<String?>(null)
 	private var modelsJob: Job? = null
-	private var sendJob: Job? = null
+	private val sendJobs = mutableMapOf<String, Job>()
 
 	init {
 		viewModelScope.launch {
@@ -64,36 +64,95 @@ class ChatViewModel @Inject constructor(
 
 	fun openChat(chatId: String?) {
 		activeChatId.value = chatId
-		if (chatId == null) {
-			_uiState.update { it.copy(chat = null, messages = emptyList(), streamingText = "", pendingModelId = null, isSending = false, chatErrorMessage = null) }
+		_uiState.update { current ->
+			val retained = current.pendingMessages.filter { it.chatId == chatId }
+			val retainedIds = retained.map { it.id }.toSet()
+			val retainedStreaming = current.streamingByMessageId.filterKeys { it in retainedIds }
+			current.copy(
+				chat = if (chatId == null) null else current.chat,
+				messages = if (chatId == null) emptyList() else current.messages,
+				pendingMessages = retained,
+				streamingByMessageId = retainedStreaming,
+				pendingModelId = if (chatId == null) null else current.pendingModelId,
+				isSending = sendJobs.isNotEmpty(),
+				chatErrorMessage = if (chatId == null) null else current.chatErrorMessage,
+			)
 		}
 	}
 
 	fun send(request: SendRequest) {
 		val content = request.text.trim()
-		if (content.isEmpty() || _uiState.value.isSending) return
+		if (content.isEmpty()) return
 		if (firebaseAuth.currentUser == null) {
 			_uiState.update { it.copy(showSignIn = true) }
 			return
 		}
-		if (activeChatId.value == null) {
+		val chatId = activeChatId.value
+		if (chatId == null) {
 			_uiState.update { it.copy(pendingModelId = null) }
 		}
-		runStream(next = {
-			chatRepository.sendMessage(activeChatId.value, request.messageId, content, request.modelId, request.reasoning?.ifBlank { null })
-		})
+		val pending = PendingMessage(id = request.messageId, text = content, chatId = chatId)
+		_uiState.update {
+			it.copy(pendingMessages = it.pendingMessages + pending, isSending = true, chatErrorMessage = null)
+		}
+		launchStream(request.messageId, cleanup = ::removePending) {
+			chatRepository.sendMessage(chatId, request.messageId, content, request.modelId, request.reasoning?.ifBlank { null })
+		}
 	}
 
 	fun retry(request: RetryRequest) {
 		val chatId = activeChatId.value ?: return
-		if (_uiState.value.isSending) return
 		if (firebaseAuth.currentUser == null) {
 			_uiState.update { it.copy(showSignIn = true) }
 			return
 		}
-		runStream(next = {
+		if (sendJobs.containsKey(request.messageId)) return
+		_uiState.update { it.copy(isSending = true, chatErrorMessage = null) }
+		launchStream(request.messageId, cleanup = ::removeStreaming) {
 			chatRepository.retryMessage(chatId, request.messageId, request.modelId, request.reasoning?.ifBlank { null })
-		})
+		}
+	}
+
+	private fun launchStream(
+		messageId: String,
+		cleanup: (String) -> Unit,
+		next: suspend () -> Outcome<Flow<String>, ChatError>,
+	) {
+		val job = viewModelScope.launch {
+			try {
+				when (val result = next()) {
+					is Outcome.Ok -> {
+						result.value.collect { token -> appendStreaming(messageId, token) }
+						cleanup(messageId)
+					}
+					is Outcome.Err -> {
+						cleanup(messageId)
+						handleChatError(result.error)
+					}
+				}
+			} catch (error: CancellationException) {
+				cleanup(messageId)
+				throw error
+			} catch (error: Exception) {
+				cleanup(messageId)
+				log("chat stream failed: $error")
+				val chatError = (error as? ChatStreamException)?.error
+				if (chatError != null) handleChatError(chatError) else _uiState.update {
+					it.copy(chatErrorMessage = chatErrorMessage(error))
+				}
+			} finally {
+				sendJobs.remove(messageId)
+				_uiState.update { it.copy(isSending = sendJobs.isNotEmpty()) }
+			}
+		}
+		sendJobs[messageId] = job
+	}
+
+	private fun appendStreaming(messageId: String, token: String) {
+		_uiState.update { current ->
+			val previous = current.streamingByMessageId[messageId].orEmpty()
+			current.copy(streamingByMessageId = current.streamingByMessageId + (messageId to previous + token))
+		}
 	}
 
 	fun selectModel(modelId: String) {
@@ -140,49 +199,31 @@ class ChatViewModel @Inject constructor(
 		}
 	}
 
-	private fun runStream(next: suspend () -> Outcome<Flow<String>, ChatError>) {
-		sendJob?.cancel()
-		_uiState.update { it.copy(isSending = true, streamingText = "", chatErrorMessage = null) }
-		sendJob = viewModelScope.launch {
-			try {
-				when (val result = next()) {
-					is Outcome.Ok -> {
-						result.value.collect { token ->
-							_uiState.update { it.copy(streamingText = it.streamingText + token) }
-						}
-						stopStreaming()
-					}
-					is Outcome.Err -> stopStreaming(result.error)
-				}
-			} catch (error: CancellationException) {
-				stopStreaming()
-				throw error
-			} catch (error: Exception) {
-				log("chat stream failed: $error")
-				val chatError = (error as? ChatStreamException)?.error
-				if (chatError != null) stopStreaming(chatError) else stopStreaming(error)
-			}
+	private fun removePending(messageId: String) {
+		_uiState.update { current ->
+			current.copy(
+				pendingMessages = current.pendingMessages.filterNot { it.id == messageId },
+				streamingByMessageId = current.streamingByMessageId.filterKeys { it != messageId },
+			)
 		}
 	}
 
-	private fun stopStreaming(message: String? = null) {
-		_uiState.update { it.copy(isSending = false, streamingText = "", chatErrorMessage = message) }
+	private fun removeStreaming(messageId: String) {
+		_uiState.update { current ->
+			current.copy(streamingByMessageId = current.streamingByMessageId.filterKeys { it != messageId })
+		}
 	}
 
-	private fun stopStreaming(error: ChatError) {
+	private fun handleChatError(error: ChatError) {
 		when (error) {
 			ChatError.OutOfCredits -> _uiState.update {
-				it.copy(isSending = false, streamingText = "", chatErrorMessage = null, showPaywall = true)
+				it.copy(chatErrorMessage = null, showPaywall = true)
 			}
 			ChatError.Unauthorized -> _uiState.update {
-				it.copy(isSending = false, streamingText = "", chatErrorMessage = null, showSignIn = true)
+				it.copy(chatErrorMessage = null, showSignIn = true)
 			}
-			else -> stopStreaming(chatErrorMessage(error))
+			else -> _uiState.update { it.copy(chatErrorMessage = chatErrorMessage(error)) }
 		}
-	}
-
-	private fun stopStreaming(error: Exception) {
-		stopStreaming(chatErrorMessage(error))
 	}
 
 	private fun chatErrorMessage(error: ChatError): String = when (error) {

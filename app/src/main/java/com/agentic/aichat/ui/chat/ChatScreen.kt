@@ -169,7 +169,8 @@ private fun ChatScreenContent(
 	val scheme = MaterialTheme.colorScheme
 	val models = state.models
 	val messages = state.messages
-	val streamingText = state.streamingText
+	val pendingMessages = state.pendingMessages
+	val streamingEntries = state.streamingByMessageId.entries.toList()
 	var draft by remember { mutableStateOf("") }
 	var stagedImage by remember { mutableStateOf(false) }
 	val effectiveModelId = state.pendingModelId ?: state.chat?.modelId ?: models.firstOrNull()?.id
@@ -260,10 +261,34 @@ private fun ChatScreenContent(
 					userScrollEnabled = flights.isEmpty(),
 					modifier = Modifier.fillMaxSize(),
 				) {
-					if (streamingText.isNotEmpty()) {
-						item(key = "streaming") {
-							StreamingBubble(text = streamingText)
-						}
+					items(streamingEntries.asReversed(), key = { entry -> "streaming-${entry.key}" }) { entry ->
+						StreamingBubble(text = entry.value)
+					}
+					items(pendingMessages.asReversed(), key = { pending -> pending.id }) { pending ->
+						MessageRow(
+							message = MessageEntity(
+								id = pending.id,
+								chatId = pending.chatId.orEmpty(),
+								role = MessageRole.USER,
+								content = pending.text,
+								createdAt = 0L,
+								status = MessageStatus.SENDING,
+							),
+							isHiddenForFlight = pending.id in flightIds,
+							onBubbleBoundsInRoot = { rect ->
+								if (flightTargets[pending.id] != rect) {
+									flightTargets[pending.id] = rect
+								}
+							},
+							modifier = Modifier.animateItem(
+								fadeInSpec = null,
+								placementSpec = spring(
+									dampingRatio = FlightMotion.DAMPING,
+									stiffness = FlightMotion.STIFFNESS,
+									visibilityThreshold = IntOffset.VisibilityThreshold,
+								),
+							),
+						)
 					}
 					items(display, key = { message -> message.id }) { message ->
 						MessageRow(
