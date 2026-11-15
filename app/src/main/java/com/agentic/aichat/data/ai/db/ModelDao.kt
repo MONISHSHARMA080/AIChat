@@ -12,7 +12,6 @@ import kotlinx.coroutines.flow.Flow
 interface ModelDao {
 
 	@Query("SELECT * FROM models")
-//	@Query("SELECT * FROM models ORDER BY name ASC")
 	fun observeAll(): Flow<List<ModelDto>>
 
 	@Query("SELECT * FROM models ORDER BY name ASC")

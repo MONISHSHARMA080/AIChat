@@ -20,7 +20,7 @@ class ChatListViewModel @Inject constructor(
 
 	init {
 		viewModelScope.launch {
-			chatRepository.getAllChats().collect { list ->
+			chatRepository.observeChats().collect { list ->
 				_chats.value = list
 			}
 		}

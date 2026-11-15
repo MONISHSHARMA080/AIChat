@@ -4,11 +4,10 @@ import com.agentic.aichat.data.chat.db.entity.ChatAttachment
 import com.agentic.aichat.data.chat.db.entity.ChatEntity
 import com.agentic.aichat.data.chat.db.entity.MessageEntity
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.StateFlow
 
 interface ChatRepository {
 
-	fun getAllChats(): Flow<List<ChatEntity>>
+	fun observeChats(): Flow<List<ChatEntity>>
 
 	fun observeChat(chatId: String): Flow<ChatEntity?>
 
@@ -16,21 +15,20 @@ interface ChatRepository {
 
 	suspend fun updateChatModel(chatId: String, modelId: String)
 
-	fun observeSyncedChatId(): StateFlow<String?>
-
-	suspend fun sendMessage(
+	fun sendMessage(
 		chatId: String?,
 		messageId: String,
 		text: String,
 		modelId: String,
 		reasoning: String?,
 		attachments: List<ChatAttachment> = emptyList(),
-	): Outcome<Flow<String>, ChatError>
-
-	suspend fun retryMessage(
-		chatId: String,
-		messageId: String,
-		modelId: String,
-		reasoning: String?,
-	): Outcome<Flow<String>, ChatError>
+	): Flow<SendMessageEvent>
 }
+
+sealed interface SendMessageEvent {
+	data class ReplyChunk(val text: String) : SendMessageEvent
+
+	data class Saved(val chatId: String) : SendMessageEvent
+}
+
+class ChatException(val error: ChatError) : Exception(error.toString())
