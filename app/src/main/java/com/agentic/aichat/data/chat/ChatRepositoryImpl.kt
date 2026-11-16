@@ -18,7 +18,6 @@ import com.google.firebase.functions.FirebaseFunctionsException
 import com.google.firebase.functions.StreamResponse
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.IOException
-import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
@@ -30,13 +29,12 @@ import kotlinx.coroutines.reactive.asFlow
 
 @Singleton
 class ChatRepositoryImpl @Inject constructor(
-	@ApplicationContext private val context: Context,
-	private val functions: FirebaseFunctions,
-	private val database: ChatDatabase,
-	private val chatDao: ChatDao,
-	private val messageDao: MessageDao,
+		@ApplicationContext private val context: Context,
+		private val functions: FirebaseFunctions,
+		private val database: ChatDatabase,
+		private val chatDao: ChatDao,
+		private val messageDao: MessageDao,
 ) : ChatRepository {
-
 	override fun observeChats(): Flow<List<ChatEntity>> = chatDao.observeAll()
 
 	override fun observeChat(chatId: String): Flow<ChatEntity?> = chatDao.observeById(chatId)
@@ -48,20 +46,16 @@ class ChatRepositoryImpl @Inject constructor(
 		chatDao.updateModel(chatId, modelId)
 
 	override fun sendMessage(
-		chatId: String?,
-		messageId: String,
-		text: String,
-		modelId: String,
-		reasoning: String?,
-		attachments: List<ChatAttachment>,
+			chatId: String?,
+			text: String,
+			modelId: String,
+			reasoning: String?,
+			attachments: List<ChatAttachment>,
 	): Flow<SendMessageEvent> = flow {
-		val sentAt = System.currentTimeMillis()
-		val title = text.lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.take(TITLE_MAX_LENGTH)
-			?: "New chat"
 		val encodedAttachments = attachments.map { attachment ->
 			val bytes = try {
 				context.contentResolver.openInputStream(attachment.uri.toUri())?.use { it.readBytes() }
-			} catch (_: IOException) {
+			} catch (error: IOException) {
 				null
 			} catch (_: SecurityException) {
 				null
@@ -76,12 +70,12 @@ class ChatRepositoryImpl @Inject constructor(
 		val requestData = buildMap<String, Any?> {
 			put("model", modelId)
 			put("chatId", chatId)
-			put("title", title)
 			put("message", mapOf("content" to text, "attachments" to encodedAttachments))
 			if (!reasoning.isNullOrBlank()) put("reasoning", reasoning)
 		}
+
 		val replyBuilder = StringBuilder()
-		var serverChatId: String? = null
+		var savedTurn: Map<*, *>? = null
 		functions.getHttpsCallable("chat")
 			.stream(requestData)
 			.asFlow()
@@ -108,54 +102,58 @@ class ChatRepositoryImpl @Inject constructor(
 						}
 					}
 					is StreamResponse.Result ->
-						serverChatId = (response.result.data as? Map<*, *>)?.get("chatId") as? String
+						savedTurn = (response.result.data as? Map<*, *>)?.get("savedTurn") as? Map<*, *>
 				}
 			}
-		val savedChatId = serverChatId ?: chatId ?: UUID.randomUUID().toString()
+
+		val turn = savedTurn ?: throw ChatException(ChatError.NotSaved)
+		val chat = turn["chat"] as Map<*, *>
+		val userMessage = turn["userMessage"] as Map<*, *>
+		val assistantMessage = turn["assistantMessage"] as Map<*, *>
+		val savedChatId = chat["id"] as String
+		val userMessageId = userMessage["id"] as String
+		val userCreatedAt = (userMessage["createdAt"] as Number).toLong()
+		val assistantCreatedAt = (assistantMessage["createdAt"] as Number).toLong()
 		val reply = replyBuilder.toString()
-		val savedAt = System.currentTimeMillis()
 		database.withWriteTransaction {
 			if (chatDao.getById(savedChatId) == null) {
 				chatDao.insert(
 					ChatEntity(
 						id = savedChatId,
-						title = title,
+						title = chat["title"] as String,
 						modelId = modelId,
-						createdAt = sentAt,
-						updatedAt = savedAt,
+						createdAt = userCreatedAt,
+						updatedAt = assistantCreatedAt,
 						lastMessageText = reply,
-						lastMessageAt = savedAt,
+						lastMessageAt = assistantCreatedAt,
 					),
 				)
 			} else {
-				chatDao.updateLastMessage(savedChatId, reply, savedAt)
+				chatDao.updateLastMessage(savedChatId, reply, assistantCreatedAt)
 			}
 			messageDao.insert(
 				MessageEntity(
-					id = messageId,
+					id = userMessageId,
 					chatId = savedChatId,
 					role = MessageRole.USER,
 					content = text,
-					createdAt = sentAt,
+					createdAt = userCreatedAt,
 					status = MessageStatus.DONE,
 					attachments = attachments,
 				),
 			)
 			messageDao.insert(
 				MessageEntity(
-					id = UUID.randomUUID().toString(),
+					id = assistantMessage["id"] as String,
 					chatId = savedChatId,
 					role = MessageRole.ASSISTANT,
 					content = reply,
-					createdAt = savedAt,
+					createdAt = assistantCreatedAt,
 					status = MessageStatus.DONE,
 				),
 			)
 		}
-		emit(SendMessageEvent.Saved(savedChatId))
-	}.flowOn(Dispatchers.IO)
 
-	private companion object {
-		const val TITLE_MAX_LENGTH = 48
-	}
+		emit(SendMessageEvent.Saved(chatId = savedChatId, userMessageId = userMessageId))
+	}.flowOn(Dispatchers.IO)
 }

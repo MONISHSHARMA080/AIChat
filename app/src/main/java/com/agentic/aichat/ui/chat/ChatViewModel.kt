@@ -25,11 +25,10 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class ChatViewModel @Inject constructor(
-	private val chatRepository: ChatRepository,
-	private val modelsRepository: ModelsRepository,
-	private val firebaseAuth: FirebaseAuth,
+		private val chatRepository: ChatRepository,
+		private val modelsRepository: ModelsRepository,
+		private val firebaseAuth: FirebaseAuth,
 ) : ViewModel() {
-
 	private val _uiState = MutableStateFlow(ChatUiState())
 	val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
 
@@ -52,11 +51,7 @@ class ChatViewModel @Inject constructor(
 			activeChatId.filterNotNull()
 				.flatMapLatest { chatRepository.observeMessages(it) }
 				.collect { messages ->
-					_uiState.update { state ->
-						val pendingTurn = state.pendingTurn
-						val isPersisted = pendingTurn != null && messages.any { it.id == pendingTurn.request.messageId }
-						state.copy(messages = messages, pendingTurn = if (isPersisted) null else pendingTurn)
-					}
+					_uiState.update { it.copy(messages = messages).withoutPersistedPendingTurn() }
 				}
 		}
 		refreshModels()
@@ -93,7 +88,6 @@ class ChatViewModel @Inject constructor(
 			try {
 				chatRepository.sendMessage(
 					chatId = activeChatId.value,
-					messageId = request.messageId,
 					text = request.text,
 					modelId = request.modelId,
 					reasoning = request.reasoning?.ifBlank { null },
@@ -103,7 +97,13 @@ class ChatViewModel @Inject constructor(
 						is SendMessageEvent.ReplyChunk -> _uiState.update { state ->
 							state.copy(pendingTurn = state.pendingTurn?.let { it.copy(replyText = it.replyText + event.text) })
 						}
-						is SendMessageEvent.Saved -> activeChatId.value = event.chatId
+						is SendMessageEvent.Saved -> {
+							_uiState.update { state ->
+								state.copy(pendingTurn = state.pendingTurn?.copy(savedUserMessageId = event.userMessageId))
+									.withoutPersistedPendingTurn()
+							}
+							activeChatId.value = event.chatId
+						}
 					}
 				}
 			} catch (error: Exception) {
@@ -116,6 +116,8 @@ class ChatViewModel @Inject constructor(
 						ChatError.Unauthorized -> failedState.copy(isSignInVisible = true)
 						ChatError.ServiceUnavailable ->
 							failedState.copy(errorMessage = "Couldn't reach the chat service. Please try again.")
+						ChatError.NotSaved ->
+							failedState.copy(errorMessage = "Your reply couldn't be saved. Please try again.")
 						is ChatError.AttachmentUnreadable ->
 							failedState.copy(errorMessage = "Couldn't read ${chatError.name}.")
 						is ChatError.Rejected ->
@@ -169,4 +171,9 @@ class ChatViewModel @Inject constructor(
 	fun dismissSignIn() {
 		_uiState.update { it.copy(isSignInVisible = false) }
 	}
+}
+
+private fun ChatUiState.withoutPersistedPendingTurn(): ChatUiState {
+	val savedUserMessageId = pendingTurn?.savedUserMessageId ?: return this
+	return if (messages.any { it.id == savedUserMessageId }) copy(pendingTurn = null) else this
 }

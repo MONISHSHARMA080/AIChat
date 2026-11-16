@@ -69,9 +69,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -168,6 +170,7 @@ private fun ChatScreenContent(
 	val pendingTurn = state.pendingTurn
 	var draft by remember { mutableStateOf("") }
 	var stagedImage by remember { mutableStateOf(false) }
+	var sentCount by rememberSaveable { mutableIntStateOf(0) }
 	val effectiveModelId = state.newChatModelId ?: state.chat?.modelId ?: models.firstOrNull()?.id
 	val selectedModel = models.firstOrNull { it.id == effectiveModelId } ?: models.firstOrNull()
 	val supportsReasoning = selectedModel?.reasoning?.levels?.isNotEmpty() == true
@@ -180,6 +183,7 @@ private fun ChatScreenContent(
 	} else {
 		""
 	}
+	val safeReasoning = safeLevel
 	var showModelSheet by remember { mutableStateOf(false) }
 	val listState = rememberLazyListState()
 	val context = LocalContext.current
@@ -253,14 +257,14 @@ private fun ChatScreenContent(
 				) {
 					pendingTurn?.let { turn ->
 						if (turn.replyText.isNotEmpty() && !turn.isFailed) {
-							item(key = "streaming-${turn.request.messageId}") {
+							item(key = "streaming-${turn.request.localKey}") {
 								StreamingBubble(text = turn.replyText)
 							}
 						}
-						item(key = turn.request.messageId) {
+						item(key = turn.request.localKey) {
 							MessageRow(
 								message = MessageEntity(
-									id = turn.request.messageId,
+									id = turn.request.localKey,
 									chatId = state.chat?.id.orEmpty(),
 									role = MessageRole.USER,
 									content = turn.request.text,
@@ -268,15 +272,16 @@ private fun ChatScreenContent(
 									status = if (turn.isFailed) MessageStatus.ERROR else MessageStatus.SENDING,
 									attachments = turn.request.attachments,
 								),
-								isHiddenForFlight = turn.request.messageId in flightIds,
+								isHiddenForFlight = turn.request.localKey in flightIds,
 								onRetry = if (turn.isFailed) onRetryMessage else null,
 								onBubbleBoundsInRoot = { rect ->
-									if (flightTargets[turn.request.messageId] != rect) {
-										flightTargets[turn.request.messageId] = rect
+									if (flightTargets[turn.request.localKey] != rect) {
+										flightTargets[turn.request.localKey] = rect
 									}
 								},
 								modifier = Modifier.animateItem(
 									fadeInSpec = null,
+									fadeOutSpec = null,
 									placementSpec = spring(
 										dampingRatio = FlightMotion.DAMPING,
 										stiffness = FlightMotion.STIFFNESS,
@@ -299,6 +304,7 @@ private fun ChatScreenContent(
 							},
 							modifier = Modifier.animateItem(
 								fadeInSpec = null,
+								fadeOutSpec = null,
 								placementSpec = spring(
 									dampingRatio = FlightMotion.DAMPING,
 									stiffness = FlightMotion.STIFFNESS,
@@ -341,7 +347,8 @@ private fun ChatScreenContent(
 						if (state.isSending) return@ChatComposer
 						val text = draft.trim()
 						if (text.isEmpty()) return@ChatComposer
-						val id = UUID.randomUUID().toString()
+						val id = "pending-$sentCount"
+						sentCount += 1
 						val hasImage = stagedImage
 						sendRevealBottomPx = imeBottomPx.toFloat()
 						haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -371,7 +378,7 @@ private fun ChatScreenContent(
 								maxWidthPx = maxWidthPx,
 							)
 						}
-						onSendMessage(SendRequest(id, text, selectedModel.id, safeLevel))
+						onSendMessage(SendRequest(id, text, selectedModel.id, safeReasoning))
 						draft = ""
 						stagedImage = false
 					},
@@ -435,6 +442,7 @@ private fun ChatScreenContent(
 		}
 	}
 }
+
 
 @Composable
 private fun RetryButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
@@ -634,7 +642,7 @@ private fun SendErrorBanner(
 		onRetry: () -> Unit,
 		onDismiss: () -> Unit,
 		modifier: Modifier = Modifier,
-) {
+){
 	Surface(
 		shape = RoundedCornerShape(16.dp),
 		color = MaterialTheme.colorScheme.errorContainer,
@@ -907,76 +915,3 @@ private fun ModelSelectorChip(
 		}
 	}
 }
-
-//private fun previewChatState(): ChatUiState {
-//	val now = System.currentTimeMillis()
-//	val day = 24 * 60 * 60 * 1000L
-//	val chat = ChatEntity(
-//		id = "preview-chat",
-//		title = "Music night out",
-//		modelId = "spark-1",
-//		createdAt = now - day,
-//		updatedAt = now,
-//		lastMessageText = null,
-//		lastMessageAt = null,
-//	)
-//	return ChatUiState(
-//		chat = chat,
-//		messages = listOf(
-//			MessageEntity(
-//				id = "preview-m2",
-//				chatId = chat.id,
-//				role = MessageRole.ASSISTANT,
-//				content = "Yes, doors at 8. I saved the tickets to the shared album.",
-//				createdAt = now - day + 60_000L,
-//				status = MessageStatus.DONE,
-//			),
-//			MessageEntity(
-//				id = "preview-m3",
-//				chatId = chat.id,
-//				role = MessageRole.USER,
-//				content = "Make me a fit that's athleisure but elevated",
-//				createdAt = now - 3 * 60 * 60 * 1000L,
-//				status = MessageStatus.DONE,
-//			),
-//		),
-//		models = listOf(
-//			ModelDto(
-//				id = "spark-1",
-//				name = "Spark 1",
-//				description = "Flagship model for everyday chats.",
-//				reasoning = ReasoningDto(levels = listOf("Less", "Medium", "Hard", "Ultra")),
-//			),
-//		),
-//	)
-//}
-
-//@Preview(name = "Chat light", showBackground = true)
-//@Composable
-//private fun ChatScreenPreviewLight() {
-//	AIChatTheme(darkTheme = false) {
-//		ChatScreenContent(
-//			state = previewChatState(),
-//			onSendMessage = {},
-//			onRetryMessage = {},
-//			onRetryModels = {},
-//			onSelectModel = {},
-//			onClearError = {},
-//		)
-//	}
-//}
-//
-//@Preview(name = "Chat dark", showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
-//@Composable
-//private fun ChatScreenPreviewDark() {
-//	AIChatTheme(darkTheme = true) {
-//		ChatScreenContent(
-//			state = previewChatState(),
-//			onSendMessage = {},
-//			onRetryMessage = {},
-//			onRetryModels = {},
-//			onSelectModel = {},
-//			onClearError = {},
-//		)
-//	}
-//}

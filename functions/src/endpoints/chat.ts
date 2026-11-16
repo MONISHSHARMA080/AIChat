@@ -18,7 +18,6 @@ const MAX_HISTORY_MESSAGES = 100;
 // The client sends ONE new message. History lives in the DB and is loaded here.
 const bodySchema = z.object({
   chatId: z.string().nullable().optional(),
-  title: z.string().nullable().optional(),
   model: z.string().min(1),
   reasoning: z.string().min(1).optional(),
   message: z
@@ -89,7 +88,7 @@ async function orUnavailable<T>(promise: Promise<T>, message: string): Promise<T
 export const chat = onCall(
   {
     timeoutSeconds: 300,
-    secrets: [AI_GATEWAY_API_KEY, REVENUECAT_SECRET_API_KEY, TURSO_AUTH_TOKEN, TURSO_DATABASE_URL],
+    secrets: [AI_GATEWAY_API_KEY, REVENUECAT_COIN_CODE, REVENUECAT_SECRET_API_KEY, TURSO_AUTH_TOKEN, TURSO_DATABASE_URL],
   },
   async (request, response) => {
     if (!request.auth) throw new HttpsError("unauthenticated", "sign in required");
@@ -229,25 +228,29 @@ export const chat = onCall(
     }
     // ---- save ----
     // One atomic DB call: (new chat row | chat preview update) + the user message + the reply.
-    let savedChatId: string | null = existingChat?.id ?? null;
-    let saved = false;
+    let savedTurn: {
+      chat: { id: string; title: string };
+      userMessage: { id: string; createdAt: number };
+      assistantMessage: { id: string; createdAt: number };
+    } | null = null;
     try {
       const now = Date.now();
       const chatId = existingChat?.id ?? randomUUID();
-      const explicitTitle = body.title?.trim();
       const firstLine = message.content
         .split("\n")
         .map((line) => line.trim())
         .find((line) => line.length > 0);
+      const title = existingChat?.title ?? (firstLine || "New chat").slice(0, TITLE_LENGTH);
+      const userMessageId = randomUUID();
+      const assistantMessageId = randomUUID();
+      const assistantCreatedAt = Math.max(now, startedAt + 1);
       await saveChatTurn({
         userId: uid,
         chatId,
-        newChat: existingChat
-          ? null
-          : { title: (explicitTitle || firstLine || "New chat").slice(0, TITLE_LENGTH), modelId: body.model },
+        newChat: existingChat ? null : { title, modelId: body.model },
         messages: [
           {
-            id: randomUUID(),
+            id: userMessageId,
             chatId,
             role: "user",
             content: message.content,
@@ -257,27 +260,30 @@ export const chat = onCall(
             attachments: JSON.stringify(attachments.map(({ name, mimeType }) => ({ name, mimeType }))),
           },
           {
-            id: randomUUID(),
+            id: assistantMessageId,
             chatId,
             role: "assistant",
             content: fullText,
-            createdAt: Math.max(now, startedAt + 1),
+            createdAt: assistantCreatedAt,
             status: "DONE",
             attachments: "[]",
           },
         ],
         preview: fullText.slice(0, PREVIEW_LENGTH),
-        at: now,
+        at: assistantCreatedAt,
       });
-      savedChatId = chatId;
-      saved = true;
+      savedTurn = {
+        chat: { id: chatId, title },
+        userMessage: { id: userMessageId, createdAt: startedAt },
+        assistantMessage: { id: assistantMessageId, createdAt: assistantCreatedAt },
+      };
     } catch (error) {
-      logger.error("chat persistence failed", { uid, chatId: savedChatId, error });
+      logger.error("chat persistence failed", { uid, chatId: existingChat?.id ?? null, error });
     }
 
-    // chatId is null only when a NEW chat failed to save. `saved` covers both cases.
+    const billing = { charged: chargedCoins, balance: balanceAfterCharge };
     return clientStreams
-      ? { charged: chargedCoins, balance: balanceAfterCharge, chatId: savedChatId, saved }
-      : { text: fullText, charged: chargedCoins, balance: balanceAfterCharge, chatId: savedChatId, saved };
+      ? { ...billing, savedTurn }
+      : { text: fullText, ...billing, savedTurn };
   },
 );

@@ -6,7 +6,6 @@ import com.agentic.aichat.data.chat.db.entity.MessageEntity
 import kotlinx.coroutines.flow.Flow
 
 interface ChatRepository {
-
 	fun observeChats(): Flow<List<ChatEntity>>
 
 	fun observeChat(chatId: String): Flow<ChatEntity?>
@@ -16,19 +15,15 @@ interface ChatRepository {
 	suspend fun updateChatModel(chatId: String, modelId: String)
 
 	fun sendMessage(
-		chatId: String?,
-		messageId: String,
-		text: String,
-		modelId: String,
-		reasoning: String?,
-		attachments: List<ChatAttachment> = emptyList(),
+			chatId: String?,
+			text: String,
+			modelId: String,
+			reasoning: String?,
+			attachments: List<ChatAttachment> = emptyList(),
 	): Flow<SendMessageEvent>
 }
 
 sealed interface SendMessageEvent {
 	data class ReplyChunk(val text: String) : SendMessageEvent
-
-	data class Saved(val chatId: String) : SendMessageEvent
+	data class Saved(val chatId: String, val userMessageId: String) : SendMessageEvent
 }
-
-class ChatException(val error: ChatError) : Exception(error.toString())
