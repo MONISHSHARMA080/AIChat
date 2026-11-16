@@ -4,13 +4,9 @@ import android.provider.Settings
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.VisibilityThreshold
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
@@ -103,6 +99,11 @@ import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.agentic.aichat.data.ai.ModelDto
 import com.agentic.aichat.ui.theme.navIconButtonShapes
+import com.mikepenz.markdown.coil3.Coil3ImageTransformerImpl
+import com.mikepenz.markdown.m3.Markdown
+import com.mikepenz.markdown.m3.markdownColor
+import com.mikepenz.markdown.m3.markdownTypography
+import com.mikepenz.markdown.model.rememberMarkdownState
 import java.util.UUID
 
 private fun statusLabel(status: MessageStatus): String = when (status) {
@@ -586,31 +587,19 @@ private fun UserMessage(
 @Composable
 private fun AssistantMessage(message: MessageEntity) {
 	if (message.content.isBlank()) return
-	val scheme = MaterialTheme.colorScheme
-	Row(
-		modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-		horizontalArrangement = Arrangement.Start,
-	) {
-		Column(
-			horizontalAlignment = Alignment.Start,
-			modifier = Modifier.fillMaxWidth(0.85f),
-		) {
-			Surface(
-				shape = assistantBubbleShape,
-				color = scheme.secondaryContainer,
-				contentColor = scheme.onSecondaryContainer,
-			) {
-				Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-					Text(text = message.content, style = MaterialTheme.typography.bodyLarge)
-				}
-			}
-		}
-	}
+	MarkdownBubble(markdown = message.content)
 }
 
 @Composable
 private fun StreamingBubble(text: String, modifier: Modifier = Modifier) {
+	MarkdownBubble(markdown = text, modifier = modifier)
+}
+
+@Composable
+private fun MarkdownBubble(markdown: String, modifier: Modifier = Modifier) {
+	if (markdown.isBlank()) return
 	val scheme = MaterialTheme.colorScheme
+	val markdownState = rememberMarkdownState(markdown, retainState = true)
 	Row(
 		modifier = modifier.fillMaxWidth().padding(vertical = 2.dp),
 		horizontalArrangement = Arrangement.Start,
@@ -625,7 +614,13 @@ private fun StreamingBubble(text: String, modifier: Modifier = Modifier) {
 				contentColor = scheme.onSecondaryContainer,
 			) {
 				Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
-					StreamingText(text = text)
+					Markdown(
+						markdownState = markdownState,
+						colors = markdownColor(text = scheme.onSecondaryContainer),
+						typography = markdownTypography(text = MaterialTheme.typography.bodyLarge),
+						imageTransformer = Coil3ImageTransformerImpl,
+						modifier = Modifier.fillMaxWidth(),
+					)
 				}
 			}
 		}
@@ -665,31 +660,6 @@ private fun SendErrorBanner(
 			}
 		}
 	}
-}
-
-@Composable
-private fun StreamingText(text: String, modifier: Modifier = Modifier) {
-	val base = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.55f)
-	val transition = rememberInfiniteTransition(label = "streaming-text")
-	val offset by transition.animateFloat(
-		initialValue = 0f,
-		targetValue = 1_200f,
-		animationSpec = infiniteRepeatable(
-			animation = tween(durationMillis = 1_800),
-			repeatMode = RepeatMode.Restart,
-		),
-		label = "shimmer",
-	)
-	val brush = Brush.linearGradient(
-		colors = listOf(base, base, Color.White, base, base),
-		start = Offset(offset - 500f, 0f),
-		end = Offset(offset, 0f),
-	)
-	Text(
-		text = text,
-		style = MaterialTheme.typography.bodyLarge.copy(brush = brush),
-		modifier = modifier,
-	)
 }
 
 @Composable
