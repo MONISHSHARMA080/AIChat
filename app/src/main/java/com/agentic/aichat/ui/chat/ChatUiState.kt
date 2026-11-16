@@ -13,6 +13,9 @@ data class ChatUiState(
 		val messages: List<MessageEntity> = emptyList(),
 		val newChatModelId: String? = null,
 		val pendingTurn: PendingTurn? = null,
+		val fileUris: Map<String, String> = emptyMap(),
+		val loadingFiles: Set<String> = emptySet(),
+		val failedFiles: Set<String> = emptySet(),
 		val errorMessage: String? = null,
 		val isPaywallVisible: Boolean = false,
 		val isSignInVisible: Boolean = false,
@@ -23,6 +26,7 @@ data class ChatUiState(
 data class PendingTurn(
 		val request: SendRequest,
 		val replyText: String = "",
+		val replyFiles: List<ChatAttachment> = emptyList(),
 		val isFailed: Boolean = false,
 		val savedUserMessageId: String? = null,
 )

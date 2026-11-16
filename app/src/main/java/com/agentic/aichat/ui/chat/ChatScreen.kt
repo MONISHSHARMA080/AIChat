@@ -94,9 +94,11 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import com.agentic.aichat.data.chat.db.entity.ChatAttachment
 import com.agentic.aichat.data.chat.db.entity.MessageEntity
 import com.agentic.aichat.data.chat.db.entity.MessageRole
 import com.agentic.aichat.data.chat.db.entity.MessageStatus
+import coil3.compose.AsyncImage
 import androidx.hilt.lifecycle.viewmodel.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.agentic.aichat.data.ai.ModelDto
@@ -147,6 +149,7 @@ fun ChatScreen(
 		onRetryModels = viewModel::refreshModels,
 		onSelectModel = viewModel::selectModel,
 		onClearError = viewModel::dismissError,
+		onRetryFile = viewModel::retryFile,
 		modifier = modifier,
 		onOpenChatList = onOpenChatList,
 	)
@@ -161,6 +164,7 @@ private fun ChatScreenContent(
 		onRetryModels: () -> Unit,
 		onSelectModel: (String) -> Unit,
 		onClearError: () -> Unit,
+		onRetryFile: (ChatAttachment) -> Unit,
 		modifier: Modifier = Modifier,
 		onOpenChatList: () -> Unit = {},
 ) {
@@ -171,7 +175,7 @@ private fun ChatScreenContent(
 	var draft by remember { mutableStateOf("") }
 	var stagedImage by remember { mutableStateOf(false) }
 	var sentCount by rememberSaveable { mutableIntStateOf(0) }
-	val effectiveModelId = state.newChatModelId ?: state.chat?.modelId ?: models.firstOrNull()?.id
+	val effectiveModelId = state.chat?.modelId ?: state.newChatModelId ?: models.firstOrNull()?.id
 	val selectedModel = models.firstOrNull { it.id == effectiveModelId } ?: models.firstOrNull()
 	val supportsReasoning = selectedModel?.reasoning?.levels?.isNotEmpty() == true
 	val levels = if (supportsReasoning) selectedModel.reasoning.levels else emptyList()
@@ -256,9 +260,20 @@ private fun ChatScreenContent(
 					modifier = Modifier.fillMaxSize(),
 				) {
 					pendingTurn?.let { turn ->
-						if (turn.replyText.isNotEmpty() && !turn.isFailed) {
+						if ((turn.replyText.isNotEmpty() || turn.replyFiles.isNotEmpty()) && !turn.isFailed) {
 							item(key = "streaming-${turn.request.localKey}") {
-								StreamingBubble(text = turn.replyText)
+								Column {
+									if (turn.replyText.isNotEmpty()) StreamingBubble(text = turn.replyText)
+									for (attachment in turn.replyFiles) {
+										GeneratedFile(
+											attachment = attachment,
+											fileUris = state.fileUris,
+											loadingFiles = state.loadingFiles,
+											failedFiles = state.failedFiles,
+											onRetryFile = onRetryFile,
+										)
+									}
+								}
 							}
 						}
 						item(key = turn.request.localKey) {
@@ -294,6 +309,10 @@ private fun ChatScreenContent(
 					items(display, key = { message -> message.id }) { message ->
 						MessageRow(
 							message = message,
+							fileUris = state.fileUris,
+							loadingFiles = state.loadingFiles,
+							failedFiles = state.failedFiles,
+							onRetryFile = onRetryFile,
 							isHiddenForFlight = message.id in flightIds,
 							isNewAssistant = message.role == MessageRole.ASSISTANT && message.id !in seenAssistantIds,
 							onAssistantSeen = { seenAssistantIds += message.id },
@@ -490,6 +509,10 @@ private val LIST_SIDE_PADDING = 12.dp
 @Composable
 private fun MessageRow(
 		message: MessageEntity,
+		fileUris: Map<String, String> = emptyMap(),
+		loadingFiles: Set<String> = emptySet(),
+		failedFiles: Set<String> = emptySet(),
+		onRetryFile: (ChatAttachment) -> Unit = {},
 		modifier: Modifier = Modifier,
 		withImage: Boolean = false,
 		isHiddenForFlight: Boolean = false,
@@ -523,7 +546,13 @@ private fun MessageRow(
 					initialOffsetX = { -it / 2 },
 				) + fadeIn(animationSpec = MaterialTheme.motionScheme.defaultEffectsSpec()),
 			) {
-				AssistantMessage(message = message)
+				AssistantMessage(
+					message = message,
+					fileUris = fileUris,
+					loadingFiles = loadingFiles,
+					failedFiles = failedFiles,
+					onRetryFile = onRetryFile,
+				)
 			}
 		}
 		MessageRole.SYSTEM -> {}
@@ -593,9 +622,90 @@ private fun UserMessage(
 }
 
 @Composable
-private fun AssistantMessage(message: MessageEntity) {
-	if (message.content.isBlank()) return
-	MarkdownBubble(markdown = message.content)
+private fun AssistantMessage(
+		message: MessageEntity,
+		fileUris: Map<String, String>,
+		loadingFiles: Set<String>,
+		failedFiles: Set<String>,
+		onRetryFile: (ChatAttachment) -> Unit,
+) {
+	if (message.content.isBlank() && message.attachments.isEmpty()) return
+	Column(horizontalAlignment = Alignment.Start) {
+		if (message.content.isNotBlank()) MarkdownBubble(markdown = message.content)
+		for (attachment in message.attachments) {
+			GeneratedFile(
+				attachment = attachment,
+				fileUris = fileUris,
+				loadingFiles = loadingFiles,
+				failedFiles = failedFiles,
+				onRetryFile = onRetryFile,
+			)
+		}
+	}
+}
+
+@Composable
+private fun GeneratedFile(
+		attachment: ChatAttachment,
+		fileUris: Map<String, String>,
+		loadingFiles: Set<String>,
+		failedFiles: Set<String>,
+		onRetryFile: (ChatAttachment) -> Unit,
+) {
+	val remoteId = attachment.remoteId
+	val localUri = if (remoteId != null) fileUris[remoteId] else attachment.uri.ifEmpty { null }
+	val isLoading = remoteId != null && remoteId in loadingFiles
+	val isFailed = remoteId != null && remoteId in failedFiles
+	Row(
+		verticalAlignment = Alignment.CenterVertically,
+		modifier = Modifier.fillMaxWidth(0.85f).padding(vertical = 2.dp),
+	) {
+		Surface(
+			shape = assistantBubbleShape,
+			color = MaterialTheme.colorScheme.secondaryContainer,
+			contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+		) {
+			Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+				if (localUri != null) {
+					if (attachment.mimeType.startsWith("image/")) {
+						AsyncImage(
+							model = localUri,
+							contentDescription = attachment.name,
+							contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+							modifier = Modifier.fillMaxWidth().height(200.dp).clip(RoundedCornerShape(16.dp)),
+						)
+						Spacer(modifier = Modifier.height(6.dp))
+					}
+					Text(text = attachment.name, style = MaterialTheme.typography.labelMedium)
+				} else when {
+					isLoading -> {
+						Row(verticalAlignment = Alignment.CenterVertically) {
+							CircularProgressIndicator(modifier = Modifier.size(20.dp))
+							Spacer(modifier = Modifier.size(8.dp))
+							Text(text = attachment.name, style = MaterialTheme.typography.labelMedium)
+						}
+					}
+					isFailed -> {
+						Row(verticalAlignment = Alignment.CenterVertically) {
+							Text(text = "Couldn't load file", style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
+							TextButton(onClick = { onRetryFile(attachment) }) {
+								Text(text = "Retry")
+							}
+						}
+					}
+					else -> Row(verticalAlignment = Alignment.CenterVertically) {
+						Icon(Icons.Filled.Image, contentDescription = null, modifier = Modifier.size(24.dp))
+						Spacer(modifier = Modifier.size(8.dp))
+						Text(text = attachment.name, style = MaterialTheme.typography.labelMedium)
+						Spacer(modifier = Modifier.size(8.dp))
+						TextButton(onClick = { onRetryFile(attachment) }) {
+							Text(text = "Load")
+						}
+					}
+				}
+			}
+		}
+	}
 }
 
 @Composable
@@ -904,7 +1014,7 @@ private fun ModelSelectorChip(
 				modifier = Modifier.padding(end = 6.dp),
 			)
 			Text(
-				text = if (effortLabel.isEmpty()) model.name else "${model.name} ? $effortLabel",
+				text = if (effortLabel.isEmpty()) model.name else "${model.name} · $effortLabel",
 				style = MaterialTheme.typography.labelLarge,
 			)
 			Icon(

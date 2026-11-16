@@ -1,5 +1,6 @@
 package com.agentic.aichat.data.chat
 
+import android.net.Uri
 import com.agentic.aichat.data.chat.db.entity.ChatAttachment
 import com.agentic.aichat.data.chat.db.entity.ChatEntity
 import com.agentic.aichat.data.chat.db.entity.MessageEntity
@@ -14,6 +15,8 @@ interface ChatRepository {
 
 	suspend fun updateChatModel(chatId: String, modelId: String)
 
+	suspend fun resolveAttachment(attachment: ChatAttachment): Uri
+
 	fun sendMessage(
 			chatId: String?,
 			text: String,
@@ -25,5 +28,6 @@ interface ChatRepository {
 
 sealed interface SendMessageEvent {
 	data class ReplyChunk(val text: String) : SendMessageEvent
+	data class ReplyFile(val attachment: ChatAttachment) : SendMessageEvent
 	data class Saved(val chatId: String, val userMessageId: String) : SendMessageEvent
 }

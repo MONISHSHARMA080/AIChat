@@ -7,6 +7,7 @@ import com.agentic.aichat.data.chat.ChatError
 import com.agentic.aichat.data.chat.ChatException
 import com.agentic.aichat.data.chat.ChatRepository
 import com.agentic.aichat.data.chat.SendMessageEvent
+import com.agentic.aichat.data.chat.db.entity.ChatAttachment
 import com.agentic.aichat.util.log
 import com.google.firebase.auth.FirebaseAuth
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -35,6 +36,7 @@ class ChatViewModel @Inject constructor(
 	private val activeChatId = MutableStateFlow<String?>(null)
 	private var sendJob: Job? = null
 	private var refreshModelsJob: Job? = null
+	private val fileJobs = mutableMapOf<String, Job>()
 
 	init {
 		viewModelScope.launch {
@@ -52,6 +54,11 @@ class ChatViewModel @Inject constructor(
 				.flatMapLatest { chatRepository.observeMessages(it) }
 				.collect { messages ->
 					_uiState.update { it.copy(messages = messages).withoutPersistedPendingTurn() }
+					for (message in messages) {
+						for (attachment in message.attachments) {
+							resolveFile(attachment)
+						}
+					}
 				}
 		}
 		refreshModels()
@@ -62,7 +69,11 @@ class ChatViewModel @Inject constructor(
 		sendJob?.cancel()
 		activeChatId.value = chatId
 		_uiState.update {
-			it.copy(chat = null, messages = emptyList(), pendingTurn = null, errorMessage = null)
+			if (chatId != null) {
+				it.copy(chat = null, messages = emptyList(), pendingTurn = null, errorMessage = null, newChatModelId = null)
+			} else {
+				it.copy(chat = null, messages = emptyList(), pendingTurn = null, errorMessage = null)
+			}
 		}
 	}
 
@@ -74,8 +85,14 @@ class ChatViewModel @Inject constructor(
 	}
 
 	fun retryFailedMessage() {
-		val failedTurn = _uiState.value.pendingTurn?.takeIf { it.isFailed } ?: return
-		startTurn(failedTurn.request)
+		val currentState = _uiState.value
+		val failedTurn = currentState.pendingTurn?.takeIf { it.isFailed } ?: return
+		val currentModelId = currentState.chat?.modelId
+			?: currentState.newChatModelId
+			?: currentState.models.firstOrNull()?.id
+			?: failedTurn.request.modelId
+		val retriedRequest = failedTurn.request.copy(modelId = currentModelId)
+		startTurn(retriedRequest)
 	}
 
 	private fun startTurn(request: SendRequest) {
@@ -97,10 +114,18 @@ class ChatViewModel @Inject constructor(
 						is SendMessageEvent.ReplyChunk -> _uiState.update { state ->
 							state.copy(pendingTurn = state.pendingTurn?.let { it.copy(replyText = it.replyText + event.text) })
 						}
+						is SendMessageEvent.ReplyFile -> {
+							_uiState.update { state ->
+								state.copy(pendingTurn = state.pendingTurn?.let { it.copy(replyFiles = it.replyFiles + event.attachment) })
+							}
+							resolveFile(event.attachment)
+						}
 						is SendMessageEvent.Saved -> {
 							_uiState.update { state ->
-								state.copy(pendingTurn = state.pendingTurn?.copy(savedUserMessageId = event.userMessageId))
-									.withoutPersistedPendingTurn()
+								state.copy(
+									newChatModelId = null,
+									pendingTurn = state.pendingTurn?.copy(savedUserMessageId = event.userMessageId),
+								).withoutPersistedPendingTurn()
 							}
 							activeChatId.value = event.chatId
 						}
@@ -132,8 +157,20 @@ class ChatViewModel @Inject constructor(
 	fun selectModel(modelId: String) {
 		val chatId = activeChatId.value
 		if (chatId == null) {
-			_uiState.update { it.copy(newChatModelId = modelId) }
+			_uiState.update { current ->
+				current.copy(
+					newChatModelId = modelId,
+					pendingTurn = current.pendingTurn?.let { it.copy(request = it.request.copy(modelId = modelId)) },
+				)
+			}
 			return
+		}
+		_uiState.update { current ->
+			current.copy(
+				newChatModelId = null,
+				chat = current.chat?.copy(modelId = modelId),
+				pendingTurn = current.pendingTurn?.let { it.copy(request = it.request.copy(modelId = modelId)) },
+			)
 		}
 		viewModelScope.launch {
 			try {
@@ -158,6 +195,40 @@ class ChatViewModel @Inject constructor(
 				)
 			}
 		}
+	}
+
+	fun resolveFile(attachment: ChatAttachment) {
+		val remoteId = attachment.remoteId ?: return
+		val state = _uiState.value
+		if (remoteId in state.fileUris || remoteId in state.loadingFiles || remoteId in state.failedFiles) return
+		if (fileJobs.containsKey(remoteId)) return
+		fileJobs[remoteId] = viewModelScope.launch {
+			try {
+				_uiState.update { it.copy(loadingFiles = it.loadingFiles + remoteId) }
+				val uri = chatRepository.resolveAttachment(attachment)
+				_uiState.update {
+					it.copy(
+						fileUris = it.fileUris + (remoteId to uri.toString()),
+						loadingFiles = it.loadingFiles - remoteId,
+					)
+				}
+			} catch (error: Exception) {
+				if (error is CancellationException) throw error
+				log("resolve file failed: $error")
+				_uiState.update { current ->
+					val failed = current.copy(loadingFiles = current.loadingFiles - remoteId, failedFiles = current.failedFiles + remoteId)
+					if ((error as? ChatException)?.error == ChatError.Unauthorized) failed.copy(isSignInVisible = true) else failed
+				}
+			} finally {
+				fileJobs.remove(remoteId)
+			}
+		}
+	}
+
+	fun retryFile(attachment: ChatAttachment) {
+		val remoteId = attachment.remoteId ?: return
+		_uiState.update { it.copy(failedFiles = it.failedFiles - remoteId) }
+		resolveFile(attachment)
 	}
 
 	fun dismissError() {
