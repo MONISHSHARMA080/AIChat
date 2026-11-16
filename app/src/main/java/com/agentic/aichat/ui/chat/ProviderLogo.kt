@@ -2,6 +2,7 @@ package com.agentic.aichat.ui.chat
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
@@ -14,6 +15,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -27,6 +29,7 @@ fun ProviderLogo(
 	size: Dp = 28.dp,
 ) {
 	var loaded by remember(logoUrl) { mutableStateOf(false) }
+	val logoPadding = if (size > 24.dp) 6.dp else 4.dp
 	Box(
 		contentAlignment = Alignment.Center,
 		modifier = modifier.size(size),
@@ -35,13 +38,13 @@ fun ProviderLogo(
 			contentAlignment = Alignment.Center,
 			modifier = Modifier.matchParentSize()
 				.clip(CircleShape)
-				.background(MaterialTheme.colorScheme.surfaceContainerHighest),
+				.background(Color.White),
 		) {
 			if (!loaded) {
 				Text(
 					text = provider.firstOrNull()?.uppercase() ?: "?",
 					style = MaterialTheme.typography.labelLarge,
-					color = MaterialTheme.colorScheme.onSurfaceVariant,
+					color = Color.Black,
 				)
 			}
 		}
@@ -55,7 +58,8 @@ fun ProviderLogo(
 				onError = { loaded = false },
 				modifier = Modifier.matchParentSize()
 					.clip(CircleShape)
-					.background(MaterialTheme.colorScheme.surfaceContainerHighest),
+					.background(Color.White)
+					.padding(logoPadding),
 			)
 		}
 	}

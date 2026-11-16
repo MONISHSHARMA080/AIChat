@@ -2,12 +2,16 @@ package com.agentic.aichat.ui.chat
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.expandHorizontally
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.shrinkHorizontally
 import androidx.compose.animation.togetherWith
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
@@ -15,15 +19,20 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.Icon
@@ -34,6 +43,8 @@ import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.rememberBottomSheetState
 import androidx.compose.material3.rememberSliderState
 import androidx.compose.runtime.Composable
@@ -45,7 +56,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
 import kotlinx.coroutines.launch
@@ -118,6 +134,7 @@ private fun SheetScreenColumn(
 	Column(
 		modifier = modifier
 			.fillMaxWidth()
+			.imePadding()
 			.padding(start = 16.dp, end = 16.dp, bottom = 24.dp),
 		verticalArrangement = Arrangement.spacedBy(8.dp),
 	) {
@@ -136,26 +153,107 @@ private fun ModelsScreen(
 	modifier: Modifier = Modifier,
 ) {
 	val scheme = MaterialTheme.colorScheme
+	val motion = MaterialTheme.motionScheme
+	var isSearching by remember { mutableStateOf(false) }
+	var searchQuery by remember { mutableStateOf("") }
+	val searchFocusRequester = remember { FocusRequester() }
+	val keyboardController = LocalSoftwareKeyboardController.current
+	val filteredModels = remember(models, searchQuery) {
+		filterModels(models = models, searchQuery = searchQuery)
+	}
+	val exitSearch: () -> Unit = {
+		searchQuery = ""
+		isSearching = false
+		keyboardController?.hide()
+	}
+	BackHandler(enabled = isSearching) {
+		exitSearch()
+	}
+	LaunchedEffect(isSearching) {
+		if (isSearching) {
+			searchFocusRequester.requestFocus()
+		}
+	}
 	SheetScreenColumn(modifier = modifier) {
-		Text(
-			text = "Choose model",
-			style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
-			color = scheme.onSurface,
-			modifier = Modifier.padding(horizontal = 8.dp),
-		)
-		LazyColumn(
-			modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp),
-			verticalArrangement = Arrangement.spacedBy(8.dp),
-		) {
-			items(models, key = { it.id }) { model ->
-				ModelRow(
-					model = model,
-					selected = model.id == selectedModel.id,
-					onClick = { onModelSelected(model) },
+		AnimatedContent(
+			targetState = isSearching,
+			contentAlignment = Alignment.CenterEnd,
+			transitionSpec = {
+				(fadeIn(animationSpec = motion.defaultEffectsSpec()) +
+					expandHorizontally(
+						expandFrom = Alignment.End,
+						animationSpec = motion.defaultSpatialSpec(),
+					)) togetherWith
+					(fadeOut(animationSpec = motion.fastEffectsSpec()) +
+						shrinkHorizontally(
+							shrinkTowards = Alignment.End,
+							animationSpec = motion.fastSpatialSpec(),
+						)) using
+					SizeTransform(clip = false) { _, _ -> motion.defaultSpatialSpec() }
+			},
+			label = "model-search-header",
+		) { searching ->
+			if (searching) {
+				ModelSearchField(
+					searchQuery = searchQuery,
+					onSearchQueryChange = { searchQuery = it },
+					onExitSearch = exitSearch,
+					onSearchAction = { keyboardController?.hide() },
+					focusRequester = searchFocusRequester,
 				)
+			} else {
+				Row(
+					verticalAlignment = Alignment.CenterVertically,
+					modifier = Modifier.fillMaxWidth(),
+				) {
+					Text(
+						text = "Choose model",
+						style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
+						color = scheme.onSurface,
+						modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+					)
+					Surface(
+						shape = CircleShape,
+						color = scheme.surfaceContainerHigh,
+						contentColor = scheme.onSurfaceVariant,
+						modifier = Modifier.size(48.dp),
+						onClick = { isSearching = true },
+					) {
+						Box(
+							contentAlignment = Alignment.Center,
+							modifier = Modifier.size(48.dp),
+						) {
+							Icon(
+								imageVector = Icons.Filled.Search,
+								contentDescription = "Search models",
+							)
+						}
+					}
+				}
 			}
 		}
-		if (selectedModel.reasoning.levels.isNotEmpty()) {
+		if (filteredModels.isEmpty()) {
+			Text(
+				text = "No models found",
+				style = MaterialTheme.typography.bodyMedium,
+				color = scheme.onSurfaceVariant,
+				modifier = Modifier.padding(horizontal = 8.dp, vertical = 16.dp),
+			)
+		} else {
+			LazyColumn(
+				modifier = Modifier.fillMaxWidth().heightIn(max = 320.dp),
+				verticalArrangement = Arrangement.spacedBy(8.dp),
+			) {
+				items(filteredModels, key = { it.id }) { model ->
+					ModelRow(
+						model = model,
+						selected = model.id == selectedModel.id,
+						onClick = { onModelSelected(model) },
+					)
+				}
+			}
+		}
+		if (!isSearching && selectedModel.reasoning.levels.isNotEmpty()) {
 			Spacer(modifier = Modifier.height(8.dp))
 			SectionLabel(text = "Reasoning")
 			EffortRow(
@@ -163,6 +261,78 @@ private fun ModelsScreen(
 				onClick = onOpenEffort,
 			)
 		}
+	}
+}
+
+@Composable
+private fun ModelSearchField(
+	searchQuery: String,
+	onSearchQueryChange: (String) -> Unit,
+	onExitSearch: () -> Unit,
+	onSearchAction: () -> Unit,
+	focusRequester: FocusRequester,
+	modifier: Modifier = Modifier,
+) {
+	val scheme = MaterialTheme.colorScheme
+	TextField(
+		value = searchQuery,
+		onValueChange = onSearchQueryChange,
+		placeholder = { Text(text = "Choose model") },
+		leadingIcon = {
+			IconButton(onClick = onExitSearch) {
+				Icon(
+					imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+					contentDescription = "Back to models",
+				)
+			}
+		},
+		trailingIcon = {
+			if (searchQuery.isNotEmpty()) {
+				IconButton(onClick = { onSearchQueryChange("") }) {
+					Icon(
+						imageVector = Icons.Filled.Close,
+						contentDescription = "Clear search",
+					)
+				}
+			}
+		},
+		singleLine = true,
+		keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+		keyboardActions = KeyboardActions(onSearch = { onSearchAction() }),
+		shape = MaterialTheme.shapes.extraLarge,
+		colors = TextFieldDefaults.colors(
+			focusedContainerColor = scheme.surfaceContainerHigh,
+			unfocusedContainerColor = scheme.surfaceContainerHigh,
+			focusedIndicatorColor = Color.Transparent,
+			unfocusedIndicatorColor = Color.Transparent,
+			cursorColor = scheme.primary,
+		),
+		modifier = modifier.fillMaxWidth().focusRequester(focusRequester),
+	)
+}
+
+private fun filterModels(
+	models: List<ModelDto>,
+	searchQuery: String,
+): List<ModelDto> {
+	val searchTerms = searchQuery
+		.lowercase()
+		.replace('-', ' ')
+		.replace('/', ' ')
+		.replace('_', ' ')
+		.split(' ', '\t', '\n')
+		.filter { it.isNotEmpty() }
+	if (searchTerms.isEmpty()) {
+		return models
+	}
+	return models.filter { model ->
+		val searchableText = listOf(model.name, model.id, model.provider, model.description.orEmpty())
+			.joinToString(" ")
+			.lowercase()
+			.replace('-', ' ')
+			.replace('/', ' ')
+			.replace('_', ' ')
+		searchTerms.all { searchTerm -> searchTerm in searchableText }
 	}
 }
 
@@ -198,6 +368,13 @@ private fun ModelRow(
 					text = model.name,
 					style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
 				)
+				if (model.provider.isNotBlank()) {
+					Text(
+						text = model.provider,
+						style = MaterialTheme.typography.labelMedium,
+						color = content.copy(alpha = 0.7f),
+					)
+				}
 			}
 			if (selected) {
 				Icon(
