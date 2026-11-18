@@ -1,6 +1,13 @@
 {
   "version": 2,
   "skills": {
+    "agents-sdk": {
+      "source": "cloudflare/skills",
+      "commit": "5108325ecceabc899c761e07aa617b09c02445ee",
+      "sourceType": "github",
+      "skillPath": "skills/agents-sdk/SKILL.md",
+      "computedHash": "7522d2aa3b6b850e3778af08ba3f0d70d1dc9b8c2c5da47e7f2e3f5944e4d691"
+    },
     "ai-gateway": {
       "source": "vercel/vercel-plugin",
       "sourceType": "github",

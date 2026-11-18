@@ -12,6 +12,7 @@ local.properties
 *.env
 .env
 .env*
+.claude/*
 
 node_modules/
 # Android Studio generated files and folders
