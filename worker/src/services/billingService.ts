@@ -1,8 +1,28 @@
+import { isFileUIPart, isTextUIPart, type UIMessage } from "ai";
 import { z } from "zod";
 import { REQUEST_TIMEOUT_MS, type RevenueCatConfig, type RuntimeConfig } from "../env.ts";
 import { AppError } from "../errors.ts";
+import type { ModelPricing } from "../types/chat.ts";
+import {
+	extractFileIdFromUrl,
+	MAX_CONTEXT_MEDIA_FILES,
+	MAX_CONTEXT_MEDIA_TURNS,
+} from "./chatMediaService.ts";
 
 const REVENUECAT_BASE_URL = "https://api.revenuecat.com/v2";
+const MIN_OUTPUT_RESERVE_TOKENS = 256;
+const MAX_OUTPUT_TOKENS_CAP = 8192;
+const ESTIMATED_CHARS_PER_TOKEN = 3.2;
+const ESTIMATED_TOKENS_PER_MEDIA_PART = 1000;
+
+const gatewayCostSchema = z.object({
+	gateway: z.object({
+		cost: z
+			.union([z.string().trim().min(1), z.number()])
+			.transform(Number)
+			.pipe(z.number().nonnegative()),
+	}),
+});
 
 const coinBalancesSchema = z.object({
 	items: z.array(
@@ -14,7 +34,7 @@ const coinBalancesSchema = z.object({
 	),
 });
 
-export interface Usage {
+interface Usage {
 	synced: boolean;
 	balance: number;
 	balances: { code: string; name: string; balance: number }[];
@@ -178,4 +198,77 @@ export async function deductCoinsOrThrow(
 		throw new Error(`deduction ${response.status}: ${await response.text()}`);
 	}
 	await response.body?.cancel();
+}
+
+export function assertSufficientCredits(input: {
+	coinBalance: number;
+	usdPerCoin: number;
+	pricing: ModelPricing;
+	recentHistory: readonly UIMessage[];
+	userText: string;
+	newAttachmentCount: number;
+}): number {
+	const availableBudgetUsd = input.coinBalance * input.usdPerCoin;
+	let textChars = input.userText.length;
+	let mediaCount = input.newAttachmentCount;
+	const historyMediaStart = Math.max(0, input.recentHistory.length - MAX_CONTEXT_MEDIA_TURNS * 2);
+
+	for (let index = 0; index < input.recentHistory.length; index += 1) {
+		const message = input.recentHistory[index];
+		const inMediaWindow = index >= historyMediaStart;
+		for (const part of message.parts) {
+			if (isTextUIPart(part)) {
+				textChars += part.text.length;
+			} else if (inMediaWindow && isFileUIPart(part) && extractFileIdFromUrl(part.url)) {
+				mediaCount += 1;
+			}
+		}
+	}
+
+	const estimatedInputTokens =
+		Math.ceil(textChars / ESTIMATED_CHARS_PER_TOKEN) +
+		Math.min(MAX_CONTEXT_MEDIA_FILES, mediaCount) * ESTIMATED_TOKENS_PER_MEDIA_PART;
+	const estimatedMinTurnUsd =
+		estimatedInputTokens * input.pricing.input + MIN_OUTPUT_RESERVE_TOKENS * input.pricing.output;
+
+	if (
+		input.coinBalance <= 0 ||
+		availableBudgetUsd <= 0 ||
+		availableBudgetUsd < estimatedMinTurnUsd
+	) {
+		throw new AppError("resource-exhausted", "insufficient credits");
+	}
+	return availableBudgetUsd;
+}
+
+export function computeStepMaxOutputTokens(
+	remainingUsd: number,
+	outputPricePerToken: number,
+): number {
+	if (outputPricePerToken <= 0) {
+		return MAX_OUTPUT_TOKENS_CAP;
+	}
+	return Math.min(
+		MAX_OUTPUT_TOKENS_CAP,
+		Math.max(
+			MIN_OUTPUT_RESERVE_TOKENS,
+			Math.floor(Math.max(0, remainingUsd) / outputPricePerToken),
+		),
+	);
+}
+
+export function extractStepCostUsd(
+	step: {
+		providerMetadata?: unknown;
+		usage: { inputTokens?: number; outputTokens?: number };
+	},
+	pricing: ModelPricing,
+): number {
+	const parsed = gatewayCostSchema.safeParse(step.providerMetadata);
+	if (parsed.success) {
+		return parsed.data.gateway.cost;
+	}
+	return (
+		(step.usage.inputTokens ?? 0) * pricing.input + (step.usage.outputTokens ?? 0) * pricing.output
+	);
 }

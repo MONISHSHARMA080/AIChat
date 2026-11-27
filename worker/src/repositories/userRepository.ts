@@ -1,10 +1,4 @@
-import type { AuthUser } from "../middleware/firebaseAuth.ts";
-
-export interface SyncedUser extends Omit<AuthUser, "tenantId" | "authTimeMs"> {
-	createdAt: number;
-	updatedAt: number;
-	lastSeenAt: number;
-}
+import type { AuthUser, SyncedUser } from "../types/auth.ts";
 
 interface UserRow {
 	uid: string;

@@ -2,6 +2,7 @@ type ErrorCode =
 	| "unauthenticated"
 	| "invalid-argument"
 	| "not-found"
+	| "conflict"
 	| "resource-exhausted"
 	| "unavailable"
 	| "internal";
@@ -10,6 +11,7 @@ const STATUS_BY_CODE: Record<ErrorCode, number> = {
 	unauthenticated: 401,
 	"invalid-argument": 400,
 	"not-found": 404,
+	conflict: 409,
 	"resource-exhausted": 402,
 	unavailable: 503,
 	internal: 500,

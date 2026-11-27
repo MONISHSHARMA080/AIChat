@@ -1,73 +1,12 @@
-import type { AuthUser } from "../middleware/firebaseAuth.ts";
+import type { AuthUser } from "../types/auth.ts";
+import type { ChatListCursor, ChatRow, FileRow } from "../types/chat.ts";
 import { prepareTouchUserStatement } from "./userRepository.ts";
-
-export interface ChatRow {
-	id: string;
-	userId: string;
-	title: string;
-	modelId: string;
-	createdAt: number;
-	updatedAt: number;
-	lastMessageText: string | null;
-	lastMessageAt: number | null;
-}
-
-export interface FileRow {
-	id: string;
-	messageId: string | null;
-	chatId: string;
-	userId: string;
-	name: string;
-	mimeType: string;
-	size: number;
-	r2Key: string;
-	createdAt: number;
-}
-
-export interface ChatListCursor {
-	updatedAt: number;
-	id: string;
-}
 
 const CHAT_COLUMNS =
 	"id, userId, title, modelId, createdAt, updatedAt, lastMessageText, lastMessageAt";
 const FILE_COLUMNS = "id, messageId, chatId, userId, name, mimeType, size, r2Key, createdAt";
 
 const UPSERT_CHAT_SQL = `INSERT INTO chats (${CHAT_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET title = CASE WHEN chats.lastMessageAt IS NULL THEN excluded.title ELSE chats.title END, modelId = excluded.modelId, lastMessageText = excluded.lastMessageText, lastMessageAt = excluded.lastMessageAt, updatedAt = excluded.updatedAt WHERE chats.userId = excluded.userId RETURNING ${CHAT_COLUMNS}`;
-
-export async function createChat(
-	db: D1Database,
-	user: AuthUser,
-	modelId: string,
-): Promise<ChatRow> {
-	const now = Date.now();
-	const chat: ChatRow = {
-		id: crypto.randomUUID(),
-		userId: user.uid,
-		title: "New chat",
-		modelId,
-		createdAt: now,
-		updatedAt: now,
-		lastMessageText: null,
-		lastMessageAt: null,
-	};
-	await db.batch([
-		prepareTouchUserStatement(db, user, now),
-		db
-			.prepare(`INSERT INTO chats (${CHAT_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-			.bind(
-				chat.id,
-				chat.userId,
-				chat.title,
-				chat.modelId,
-				chat.createdAt,
-				chat.updatedAt,
-				chat.lastMessageText,
-				chat.lastMessageAt,
-			),
-	]);
-	return chat;
-}
 
 export async function getChatById(
 	db: D1Database,
@@ -142,6 +81,20 @@ export async function getFileById(
 		.first<FileRow>();
 }
 
+export async function getChatFileById(
+	db: D1Database,
+	userId: string,
+	chatId: string,
+	fileId: string,
+): Promise<FileRow | null> {
+	return db
+		.prepare(
+			`SELECT ${FILE_COLUMNS} FROM message_files WHERE id = ? AND userId = ? AND chatId = ? LIMIT 1`,
+		)
+		.bind(fileId, userId, chatId)
+		.first<FileRow>();
+}
+
 export async function saveChatSummary(
 	db: D1Database,
 	input: {
@@ -149,7 +102,7 @@ export async function saveChatSummary(
 		chatId: string;
 		title: string;
 		modelId: string;
-		files: FileRow[];
+		files: readonly FileRow[];
 		preview: string;
 		at: number;
 	},

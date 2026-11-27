@@ -1,7 +1,7 @@
 import { parseEnv, revenueCatConfigSchema } from "../env.ts";
 import { resolveOrThrowUnavailable } from "../errors.ts";
-import type { AuthUser } from "../middleware/firebaseAuth.ts";
 import { getUserUsage } from "../services/billingService.ts";
+import type { AuthUser } from "../types/auth.ts";
 
 export async function handleGetUsageRequest(env: Env, user: AuthUser): Promise<Response> {
 	const config = parseEnv(revenueCatConfigSchema, env);

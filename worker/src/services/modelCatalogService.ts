@@ -1,6 +1,8 @@
 import { createGateway } from "ai";
 import { z } from "zod";
 import { REQUEST_TIMEOUT_MS } from "../env.ts";
+import { AppError } from "../errors.ts";
+import type { ModelPricing } from "../types/chat.ts";
 
 const VERCEL_AI_GATEWAY_MODELS_URL = "https://ai-gateway.vercel.sh/v1/models";
 const MODEL_CATALOG_CACHE_URL = "https://cache.aichat.internal/ai-models/catalog";
@@ -44,7 +46,7 @@ const cachedModelCatalogSchema = z.object({
 });
 
 type ModelReasoning = z.infer<typeof modelReasoningSchema>;
-export type ModelInfo = z.infer<typeof modelInfoSchema>;
+type ModelInfo = z.infer<typeof modelInfoSchema>;
 
 function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
 	const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
@@ -167,4 +169,23 @@ export async function fetchAvailableModels(options: {
 	}
 
 	return models;
+}
+
+export function resolveChatModel(
+	models: readonly ModelInfo[],
+	modelId: string,
+	reasoning?: string,
+): { id: string; pricing: ModelPricing } {
+	const model = models.find((entry) => entry.id === modelId);
+	if (!model) {
+		throw new AppError("invalid-argument", "unknown model");
+	}
+	if (!model.pricing) {
+		throw new AppError("invalid-argument", "model has no pricing");
+	}
+	if (reasoning && !model.reasoning.levels.includes(reasoning)) {
+		const allowed = model.reasoning.levels.join(", ") || "none";
+		throw new AppError("invalid-argument", `reasoning must be one of: ${allowed}`);
+	}
+	return { id: model.id, pricing: model.pricing };
 }

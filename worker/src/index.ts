@@ -1,8 +1,7 @@
 import { AppError } from "./errors.ts";
 import { handleSyncUserRequest } from "./handlers/authHandler.ts";
 import {
-	handleChatAgentRequest,
-	handleCreateChatRequest,
+	handleChatRequest,
 	handleGetChatMessagesRequest,
 	handleListChatsRequest,
 } from "./handlers/chatHandler.ts";
@@ -17,10 +16,10 @@ const HEALTH_ROUTE = new URLPattern({ pathname: "/health{/}?" });
 const AUTH_SYNC_ROUTE = new URLPattern({ pathname: "/auth/sync{/}?" });
 const USAGE_ROUTE = new URLPattern({ pathname: "/usage{/}?" });
 const MODELS_ROUTE = new URLPattern({ pathname: "/models{/}?" });
+const CHAT_ROUTE = new URLPattern({ pathname: "/chat{/}?" });
 const CHATS_ROUTE = new URLPattern({ pathname: "/chats{/}?" });
 const CHAT_MESSAGES_ROUTE = new URLPattern({ pathname: "/chats/:chatId/messages{/}?" });
 const FILE_ROUTE = new URLPattern({ pathname: "/files/:fileId{/}?" });
-const CHAT_AGENT_ROUTE = new URLPattern({ pathname: "/agents/chat-agent/:chatId{/*}?" });
 
 function errorResponse(status: number, code: string, message: string): Response {
 	return Response.json({ error: { code, message } }, { status });
@@ -51,16 +50,6 @@ export default {
 			}
 
 			return await withFirebaseAuth(request, env, async (user) => {
-				const agentMatch = CHAT_AGENT_ROUTE.exec(pathname);
-				if (agentMatch) {
-					return await handleChatAgentRequest(
-						request,
-						env,
-						user,
-						decodeParam(agentMatch.pathname.groups.chatId),
-					);
-				}
-
 				if (AUTH_SYNC_ROUTE.test(pathname)) {
 					if (request.method !== "POST") {
 						return errorResponse(405, "invalid-argument", "method not allowed");
@@ -82,14 +71,18 @@ export default {
 					return await handleListModelsRequest(env, ctx);
 				}
 
+				if (CHAT_ROUTE.test(pathname)) {
+					if (request.method !== "POST") {
+						return errorResponse(405, "invalid-argument", "method not allowed");
+					}
+					return await handleChatRequest(request, env, ctx, user);
+				}
+
 				if (CHATS_ROUTE.test(pathname)) {
-					if (request.method === "GET") {
-						return await handleListChatsRequest(request, env, user);
+					if (request.method !== "GET") {
+						return errorResponse(405, "invalid-argument", "method not allowed");
 					}
-					if (request.method === "POST") {
-						return await handleCreateChatRequest(request, env, user);
-					}
-					return errorResponse(405, "invalid-argument", "method not allowed");
+					return await handleListChatsRequest(request, env, user);
 				}
 
 				const chatMessagesMatch = CHAT_MESSAGES_ROUTE.exec(pathname);

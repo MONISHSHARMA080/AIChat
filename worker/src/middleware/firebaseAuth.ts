@@ -1,24 +1,12 @@
 import { createRemoteJWKSet, errors, jwtVerify, type JWTPayload } from "jose";
 import { firebaseAuthConfigSchema, parseEnv, REQUEST_TIMEOUT_MS } from "../env.ts";
 import { AppError } from "../errors.ts";
+import type { AuthUser } from "../types/auth.ts";
 
 const FIREBASE_JWKS_URL =
 	"https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
 const JWKS_REFRESH_COOLDOWN_MS = 60_000;
 const AUTH_CLOCK_SKEW_SECONDS = 60;
-
-export interface AuthUser {
-	uid: string;
-	email: string | null;
-	displayName: string | null;
-	photoUrl: string | null;
-	phoneNumber: string | null;
-	provider: string;
-	emailVerified: boolean;
-	isAnonymous: boolean;
-	tenantId: string | null;
-	authTimeMs: number;
-}
 
 interface FirebaseJwtPayload extends JWTPayload {
 	sub?: string;

@@ -1,6 +1,6 @@
 import { AppError } from "../errors.ts";
-import type { AuthUser } from "../middleware/firebaseAuth.ts";
 import { getFileById } from "../repositories/chatRepository.ts";
+import type { AuthUser } from "../types/auth.ts";
 
 export async function handleGetFileRequest(
 	env: Env,

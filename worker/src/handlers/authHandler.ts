@@ -1,6 +1,6 @@
 import { AppError } from "../errors.ts";
-import type { AuthUser } from "../middleware/firebaseAuth.ts";
 import { upsertUser } from "../repositories/userRepository.ts";
+import type { AuthUser } from "../types/auth.ts";
 
 export async function handleSyncUserRequest(env: Env, user: AuthUser): Promise<Response> {
 	try {
