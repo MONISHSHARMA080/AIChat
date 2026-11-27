@@ -1,22 +1,63 @@
 import { createGateway } from "ai";
-import {
-	MODEL_CATALOG_CACHE_URL,
-	MS_PER_HOUR,
-	REQUEST_TIMEOUT_MS,
-	VERCEL_AI_GATEWAY_MODELS_URL,
-} from "../config/constants.ts";
-import {
-	cachedModelCatalogSchema,
-	catalogSchema,
-	type CachedModelCatalog,
-	type FetchAvailableModelsOptions,
-	type ModelInfo,
-	type ModelReasoning,
-} from "../types/models.ts";
+import { z } from "zod";
+import { REQUEST_TIMEOUT_MS } from "../env.ts";
 
-export async function fetchAvailableModels(
-	options: FetchAvailableModelsOptions,
-): Promise<ModelInfo[]> {
+const VERCEL_AI_GATEWAY_MODELS_URL = "https://ai-gateway.vercel.sh/v1/models";
+const MODEL_CATALOG_CACHE_URL = "https://cache.aichat.internal/ai-models/catalog";
+const MS_PER_HOUR = 60 * 60 * 1000;
+
+const catalogSchema = z.object({
+	data: z.array(
+		z.object({
+			id: z.string(),
+			reasoning_options: z
+				.array(
+					z.object({
+						type: z.string(),
+						values: z.array(z.string()).nullish(),
+					}),
+				)
+				.nullish(),
+		}),
+	),
+});
+
+const modelReasoningSchema = z.object({
+	levels: z.array(z.string()),
+	toggle: z.boolean(),
+	budgetTokens: z.boolean(),
+});
+
+const modelInfoSchema = z.object({
+	id: z.string(),
+	name: z.string(),
+	description: z.string().nullable(),
+	pricing: z.object({ input: z.number(), output: z.number() }).nullable(),
+	reasoning: modelReasoningSchema,
+	provider: z.string(),
+	logoUrl: z.string().nullable(),
+});
+
+const cachedModelCatalogSchema = z.object({
+	fetchedAt: z.number(),
+	models: z.array(modelInfoSchema),
+});
+
+type ModelReasoning = z.infer<typeof modelReasoningSchema>;
+export type ModelInfo = z.infer<typeof modelInfoSchema>;
+
+function fetchWithTimeout(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+	const timeoutSignal = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+	const signal = init?.signal ? AbortSignal.any([init.signal, timeoutSignal]) : timeoutSignal;
+	return fetch(input, { ...init, signal });
+}
+
+export async function fetchAvailableModels(options: {
+	apiKey: string;
+	logoBaseUrl: string;
+	cacheTtlHours: number;
+	ctx?: Pick<ExecutionContext, "waitUntil">;
+}): Promise<ModelInfo[]> {
 	const cacheTtlMs = options.cacheTtlHours * MS_PER_HOUR;
 	const cacheTtlSeconds = Math.max(1, Math.floor(cacheTtlMs / 1000));
 	const cacheKeyRequest = new Request(MODEL_CATALOG_CACHE_URL, { method: "GET" });
@@ -38,17 +79,21 @@ export async function fetchAvailableModels(
 		);
 	}
 
-	const [sdkCatalog, reasoningResponse] = await Promise.all([
-		createGateway({ apiKey: options.apiKey }).getAvailableModels(),
-		fetch(VERCEL_AI_GATEWAY_MODELS_URL, {
-			signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-		}),
+	const [sdkCatalog, parsedCatalog] = await Promise.all([
+		createGateway({
+			apiKey: options.apiKey,
+			fetch: fetchWithTimeout,
+		}).getAvailableModels(),
+		(async () => {
+			const response = await fetchWithTimeout(VERCEL_AI_GATEWAY_MODELS_URL);
+			if (!response.ok) {
+				await response.body?.cancel();
+				throw new Error(`catalog request failed: ${response.status}`);
+			}
+			return catalogSchema.parse(await response.json());
+		})(),
 	]);
 
-	if (!reasoningResponse.ok) {
-		throw new Error(`catalog request failed: ${reasoningResponse.status}`);
-	}
-	const parsedCatalog = catalogSchema.parse(await reasoningResponse.json());
 	const reasoningByModel = new Map<string, ModelReasoning>(
 		parsedCatalog.data.map((entry) => {
 			const reasoningOptions = entry.reasoning_options ?? [];
@@ -66,16 +111,19 @@ export async function fetchAvailableModels(
 		}),
 	);
 
-	const baseLogoUrl = options.logoBaseUrl.endsWith("/")
-		? options.logoBaseUrl.slice(0, -1)
-		: options.logoBaseUrl;
+	const trimmedLogoBase = options.logoBaseUrl.trim();
+	const normalizedLogoBase = trimmedLogoBase
+		? trimmedLogoBase.endsWith("/")
+			? trimmedLogoBase
+			: `${trimmedLogoBase}/`
+		: "";
 
 	const models: ModelInfo[] = sdkCatalog.models
 		.filter((model) => (model.modelType ?? "language") === "language")
 		.map((model) => {
 			const input = Number(model.pricing?.input);
 			const output = Number(model.pricing?.output);
-			const provider = model.id.split("/")[0] ?? "other";
+			const provider = model.id.split("/")[0] || "other";
 			return {
 				id: model.id,
 				name: model.name,
@@ -87,18 +135,16 @@ export async function fetchAvailableModels(
 					budgetTokens: false,
 				},
 				provider,
-				logoUrl: baseLogoUrl ? `${baseLogoUrl}/logos/${provider.toLowerCase()}.svg` : null,
+				logoUrl: normalizedLogoBase
+					? new URL(`logos/${provider.toLowerCase()}.svg`, normalizedLogoBase).toString()
+					: null,
 			};
 		});
 
-	const cachePayload: CachedModelCatalog = {
-		fetchedAt: Date.now(),
-		models,
-	};
 	const cacheWrite = caches.default
 		.put(
 			cacheKeyRequest,
-			new Response(JSON.stringify(cachePayload), {
+			new Response(JSON.stringify({ fetchedAt: Date.now(), models }), {
 				headers: {
 					"Content-Type": "application/json",
 					"Cache-Control": `public, max-age=${cacheTtlSeconds}`,

@@ -1,19 +1,14 @@
+import { AppError } from "../errors.ts";
+import type { AuthUser } from "../middleware/firebaseAuth.ts";
 import { getFileById } from "../repositories/chatRepository.ts";
-import type { FirebaseIdToken } from "../types/auth.ts";
-import { AppError } from "../types/errors.ts";
 
 export async function handleGetFileRequest(
 	env: Env,
-	user: FirebaseIdToken,
+	user: AuthUser,
 	fileId: string,
 ): Promise<Response> {
 	const fileRow = await getFileById(env.DB, user.uid, fileId);
 	if (!fileRow) {
-		throw new AppError("not-found", "file not found");
-	}
-
-	const object = await env.FILES_BUCKET.get(fileRow.r2Key);
-	if (!object) {
 		throw new AppError("not-found", "file not found");
 	}
 
@@ -41,13 +36,23 @@ export async function handleGetFileRequest(
 	const contentDisposition = `attachment; filename="${asciiName}"; filename*=UTF-8''${utf8Encoded}`;
 
 	const headers = new Headers({
-		"Content-Type": fileRow.mimeType,
 		"Content-Disposition": contentDisposition,
 		"Cache-Control": "private, no-store",
 		"X-Content-Type-Options": "nosniff",
-		"Content-Length": String(object.size),
-		ETag: object.httpEtag,
 	});
+	try {
+		headers.set("Content-Type", fileRow.mimeType);
+	} catch {
+		headers.set("Content-Type", "application/octet-stream");
+	}
+
+	const object = await env.FILES_BUCKET.get(fileRow.r2Key);
+	if (!object) {
+		throw new AppError("not-found", "file not found");
+	}
+
+	headers.set("Content-Length", String(object.size));
+	headers.set("ETag", object.httpEtag);
 
 	return new Response(object.body, { status: 200, headers });
 }

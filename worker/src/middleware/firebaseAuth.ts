@@ -1,36 +1,52 @@
-import { createRemoteJWKSet, errors, jwtVerify } from "jose";
-import {
-	AUTH_CLOCK_SKEW_SECONDS,
-	FIREBASE_JWKS_URL,
-	firebaseAuthConfigSchema,
-	JWKS_REFRESH_COOLDOWN_MS,
-	parseEnv,
-	REQUEST_TIMEOUT_MS,
-} from "../config/constants.ts";
-import type { FirebaseIdToken } from "../types/auth.ts";
-import { AppError } from "../types/errors.ts";
+import { createRemoteJWKSet, errors, jwtVerify, type JWTPayload } from "jose";
+import { firebaseAuthConfigSchema, parseEnv, REQUEST_TIMEOUT_MS } from "../env.ts";
+import { AppError } from "../errors.ts";
+
+const FIREBASE_JWKS_URL =
+	"https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
+const JWKS_REFRESH_COOLDOWN_MS = 60_000;
+const AUTH_CLOCK_SKEW_SECONDS = 60;
+
+export interface AuthUser {
+	uid: string;
+	email: string | null;
+	displayName: string | null;
+	photoUrl: string | null;
+	phoneNumber: string | null;
+	provider: string;
+	emailVerified: boolean;
+	isAnonymous: boolean;
+	tenantId: string | null;
+	authTimeMs: number;
+}
+
+interface FirebaseJwtPayload extends JWTPayload {
+	sub?: string;
+	iat?: number;
+	auth_time?: number;
+	email?: string;
+	email_verified?: boolean;
+	name?: string;
+	picture?: string;
+	phone_number?: string;
+	tenant_id?: string;
+	firebase?: {
+		sign_in_provider?: string;
+		tenant?: string;
+	};
+}
 
 const firebaseJwks = createRemoteJWKSet(new URL(FIREBASE_JWKS_URL), {
 	timeoutDuration: REQUEST_TIMEOUT_MS,
 	cooldownDuration: JWKS_REFRESH_COOLDOWN_MS,
 });
 
-function isJwksFetchError(error: unknown): boolean {
-	if (!(error instanceof errors.JOSEError)) {
-		return true;
-	}
-	return (
-		error instanceof errors.JWKSTimeout ||
-		error instanceof errors.JWKSInvalid ||
-		error instanceof errors.JWKInvalid ||
-		error.code === "ERR_JOSE_GENERIC"
-	);
-}
-
-async function verifyFirebaseRequest(
+export async function withFirebaseAuth(
 	request: Request,
-	firebaseProjectId: string,
-): Promise<FirebaseIdToken> {
+	env: Env,
+	next: (user: AuthUser) => Promise<Response>,
+): Promise<Response> {
+	const { FIREBASE_PROJECT_ID } = parseEnv(firebaseAuthConfigSchema, env);
 	const authorizationHeader = request.headers.get("Authorization")?.trim() ?? "";
 	if (authorizationHeader.slice(0, 7).toLowerCase() !== "bearer ") {
 		throw new AppError("unauthenticated", "sign in required");
@@ -40,19 +56,26 @@ async function verifyFirebaseRequest(
 		throw new AppError("unauthenticated", "sign in required");
 	}
 
-	let payload: FirebaseIdToken;
+	let payload: FirebaseJwtPayload;
 	let kid: unknown;
 	try {
-		const verified = await jwtVerify<FirebaseIdToken>(token, firebaseJwks, {
+		const verified = await jwtVerify<FirebaseJwtPayload>(token, firebaseJwks, {
 			algorithms: ["RS256"],
-			audience: firebaseProjectId,
-			issuer: `https://securetoken.google.com/${firebaseProjectId}`,
+			audience: FIREBASE_PROJECT_ID,
+			issuer: `https://securetoken.google.com/${FIREBASE_PROJECT_ID}`,
 			requiredClaims: ["exp", "iat", "sub", "auth_time"],
+			clockTolerance: AUTH_CLOCK_SKEW_SECONDS,
 		});
 		payload = verified.payload;
 		kid = verified.protectedHeader.kid;
 	} catch (error) {
-		if (isJwksFetchError(error)) {
+		const isJwksError =
+			!(error instanceof errors.JOSEError) ||
+			error instanceof errors.JWKSTimeout ||
+			error instanceof errors.JWKSInvalid ||
+			error instanceof errors.JWKInvalid ||
+			error.code === "ERR_JOSE_GENERIC";
+		if (isJwksError) {
 			throw new AppError("unavailable", "could not load auth signing keys");
 		}
 		throw new AppError("unauthenticated", "invalid auth token");
@@ -63,8 +86,8 @@ async function verifyFirebaseRequest(
 	}
 
 	const nowSeconds = Math.floor(Date.now() / 1000);
-	const subject = typeof payload.sub === "string" ? payload.sub.trim() : "";
-	if (!subject || subject.length > 128) {
+	const uid = typeof payload.sub === "string" ? payload.sub.trim() : "";
+	if (!uid || uid.length > 128) {
 		throw new AppError("unauthenticated", "invalid auth token subject");
 	}
 	if (
@@ -82,18 +105,20 @@ async function verifyFirebaseRequest(
 		throw new AppError("unauthenticated", "invalid auth token authentication time");
 	}
 
-	return {
-		...payload,
-		uid: subject,
-	};
-}
+	const provider = payload.firebase?.sign_in_provider ?? "unknown";
+	const tenantId =
+		payload.firebase?.tenant ?? (typeof payload.tenant_id === "string" ? payload.tenant_id : null);
 
-export async function withFirebaseAuth(
-	request: Request,
-	env: Env,
-	next: (user: FirebaseIdToken) => Promise<Response>,
-): Promise<Response> {
-	const { FIREBASE_PROJECT_ID } = parseEnv(firebaseAuthConfigSchema, env);
-	const user = await verifyFirebaseRequest(request, FIREBASE_PROJECT_ID);
-	return next(user);
+	return next({
+		uid,
+		email: payload.email ?? null,
+		displayName: payload.name ?? null,
+		photoUrl: payload.picture ?? null,
+		phoneNumber: payload.phone_number ?? null,
+		provider,
+		emailVerified: payload.email_verified === true,
+		isAnonymous: provider === "anonymous",
+		tenantId,
+		authTimeMs: payload.auth_time * 1000,
+	});
 }

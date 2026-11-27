@@ -1,29 +1,55 @@
-import { REQUEST_TIMEOUT_MS, REVENUECAT_BASE_URL } from "../config/constants.ts";
-import { coinBalancesSchema, type BillingSummary } from "../types/billing.ts";
-import type { RuntimeConfig } from "../types/config.ts";
-import { AppError } from "../types/errors.ts";
+import { z } from "zod";
+import { REQUEST_TIMEOUT_MS, type RevenueCatConfig, type RuntimeConfig } from "../env.ts";
+import { AppError } from "../errors.ts";
+
+const REVENUECAT_BASE_URL = "https://api.revenuecat.com/v2";
+
+const coinBalancesSchema = z.object({
+	items: z.array(
+		z.object({
+			currency_code: z.string().min(1),
+			name: z.string().nullish(),
+			balance: z.number(),
+		}),
+	),
+});
+
+export interface Usage {
+	synced: boolean;
+	balance: number;
+	balances: { code: string; name: string; balance: number }[];
+}
 
 function requestRevenueCat(
-	config: RuntimeConfig,
+	config: RevenueCatConfig,
 	path: string,
 	init: Omit<RequestInit, "headers"> & { headers?: Record<string, string> } = {},
 ): Promise<Response> {
-	return fetch(`${REVENUECAT_BASE_URL}${path}`, {
+	const url = new URL(`${REVENUECAT_BASE_URL}${path}`);
+	url.searchParams.set("include_empty_balances", "true");
+	return fetch(url, {
 		...init,
 		headers: {
 			Authorization: `Bearer ${config.REVENUECAT_SECRET_API_KEY}`,
+			Accept: "application/json",
 			...init.headers,
 		},
 		signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
 	});
 }
 
-function parseCoinBalance(payload: unknown, coinCode: string): number | null {
+function parseBalances(payload: unknown, coinCode: string): Usage | null {
 	const parsed = coinBalancesSchema.safeParse(payload);
 	if (!parsed.success) {
 		return null;
 	}
-	return parsed.data.items.find((item) => item.currency_code === coinCode)?.balance ?? 0;
+	const balances = parsed.data.items.map((item) => ({
+		code: item.currency_code,
+		name: item.name ?? item.currency_code,
+		balance: Math.max(0, Math.floor(item.balance)),
+	}));
+	const balance = balances.find((entry) => entry.code === coinCode)?.balance ?? 0;
+	return { synced: true, balance, balances };
 }
 
 function postCoinDeduction(
@@ -48,14 +74,14 @@ function postCoinDeduction(
 	);
 }
 
-export async function getUserCoinBalance(config: RuntimeConfig, uid: string): Promise<number> {
+export async function getUserUsage(config: RevenueCatConfig, uid: string): Promise<Usage> {
 	const response = await requestRevenueCat(
 		config,
 		`/projects/${encodeURIComponent(config.REVENUECAT_PROJECT_ID)}/customers/${encodeURIComponent(uid)}/virtual_currencies`,
 	);
 	if (response.status === 404) {
 		await response.body?.cancel();
-		return 0;
+		return { synced: false, balance: 0, balances: [] };
 	}
 	if (!response.ok) {
 		console.error(
@@ -66,28 +92,33 @@ export async function getUserCoinBalance(config: RuntimeConfig, uid: string): Pr
 				body: await response.text(),
 			}),
 		);
-		throw new AppError("unavailable", "balance lookup failed");
+		throw new AppError("unavailable", "balance is temporarily unavailable");
 	}
-	const balance = parseCoinBalance(await response.json(), config.REVENUECAT_COIN_CODE);
-	if (balance === null) {
-		throw new AppError("unavailable", "unexpected balance response");
+	const usage = parseBalances(await response.json(), config.REVENUECAT_COIN_CODE);
+	if (!usage) {
+		console.error(
+			JSON.stringify({
+				event: "revenuecat_balance_unexpected_payload",
+				uid,
+			}),
+		);
+		throw new AppError("unavailable", "balance is temporarily unavailable");
 	}
-	return balance;
+	return usage;
 }
 
-export interface BillingDeductionResult extends BillingSummary {
-	failed: boolean;
+export async function getUserCoinBalance(config: RevenueCatConfig, uid: string): Promise<number> {
+	return (await getUserUsage(config, uid)).balance;
 }
 
 export async function deductCoinsOrThrow(
 	config: RuntimeConfig,
 	uid: string,
-	userCoinBalance: number,
 	gatewayCostUsd: number,
-	idempotencyKey: string = crypto.randomUUID(),
-): Promise<BillingSummary> {
+	idempotencyKey: string,
+): Promise<void> {
 	if (gatewayCostUsd <= 0) {
-		return { charged: 0, balance: userCoinBalance };
+		return;
 	}
 
 	const coinsToCharge = Math.max(
@@ -112,7 +143,7 @@ export async function deductCoinsOrThrow(
 					gatewayCostUsd,
 				}),
 			);
-			return { charged: 0, balance: currentBalance };
+			return;
 		}
 
 		const fallbackResponse = await postCoinDeduction(
@@ -127,7 +158,7 @@ export async function deductCoinsOrThrow(
 			);
 		}
 		const updatedBalance =
-			parseCoinBalance(await fallbackResponse.json(), config.REVENUECAT_COIN_CODE) ??
+			parseBalances(await fallbackResponse.json(), config.REVENUECAT_COIN_CODE)?.balance ??
 			Math.max(0, currentBalance - fallbackCoins);
 		console.warn(
 			JSON.stringify({
@@ -140,44 +171,11 @@ export async function deductCoinsOrThrow(
 				gatewayCostUsd,
 			}),
 		);
-		return { charged: fallbackCoins, balance: updatedBalance };
+		return;
 	}
 
 	if (!response.ok) {
 		throw new Error(`deduction ${response.status}: ${await response.text()}`);
 	}
-	const updatedBalance =
-		parseCoinBalance(await response.json(), config.REVENUECAT_COIN_CODE) ??
-		userCoinBalance - coinsToCharge;
-	return { charged: coinsToCharge, balance: updatedBalance };
-}
-
-export async function deductCoinsForCost(
-	config: RuntimeConfig,
-	uid: string,
-	userCoinBalance: number,
-	gatewayCostUsd: number,
-	idempotencyKey: string = crypto.randomUUID(),
-): Promise<BillingDeductionResult> {
-	try {
-		const summary = await deductCoinsOrThrow(
-			config,
-			uid,
-			userCoinBalance,
-			gatewayCostUsd,
-			idempotencyKey,
-		);
-		return { ...summary, failed: false };
-	} catch (error) {
-		console.error(
-			JSON.stringify({
-				event: "billing_deduction_failed",
-				uid,
-				gatewayCostUsd,
-				idempotencyKey,
-				error: error instanceof Error ? error.message : String(error),
-			}),
-		);
-		return { charged: 0, balance: userCoinBalance, failed: true };
-	}
+	await response.body?.cancel();
 }

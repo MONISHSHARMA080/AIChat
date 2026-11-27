@@ -1,4 +1,4 @@
-export type ErrorCode =
+type ErrorCode =
 	| "unauthenticated"
 	| "invalid-argument"
 	| "not-found"
@@ -25,4 +25,23 @@ export class AppError extends Error {
 		this.code = code;
 		this.status = STATUS_BY_CODE[code];
 	}
+}
+
+export async function resolveOrThrowUnavailable<T>(
+	operation: Promise<T>,
+	unavailableMessage: string,
+): Promise<T> {
+	return operation.catch((error) => {
+		if (error instanceof AppError) {
+			throw error;
+		}
+		console.error(
+			JSON.stringify({
+				event: "dependency_unavailable",
+				message: unavailableMessage,
+				error: error instanceof Error ? error.message : String(error),
+			}),
+		);
+		throw new AppError("unavailable", unavailableMessage);
+	});
 }

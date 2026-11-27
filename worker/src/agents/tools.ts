@@ -1,17 +1,38 @@
 import { tool } from "ai";
 import { z } from "zod";
-import {
-	buildFileR2Key,
-	extensionForMediaType,
-	MAX_GENERATED_FILE_BYTES,
-	MAX_GENERATED_FILES,
-} from "../config/constants.ts";
 import { getChatFilesMetadata, getFileById } from "../repositories/chatRepository.ts";
-import type { ChatToolContext, StoredFile } from "../types/chat.ts";
 
+const MAX_GENERATED_FILES = 10;
+const MAX_GENERATED_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_READABLE_TEXT_CHARS = 24_000;
 
-export function createChatTools(context: ChatToolContext) {
+const EXTENSION_BY_MIME_TYPE: Record<string, string> = {
+	"text/plain": "txt",
+	"text/markdown": "md",
+	"application/json": "json",
+	"image/svg+xml": "svg",
+};
+
+export interface StoredFile {
+	id: string;
+	name: string;
+	mimeType: string;
+	size: number;
+	r2Key: string;
+	createdAt: number;
+}
+
+function normalizeMediaType(mediaType: string): string {
+	return mediaType.split(";")[0].trim().toLowerCase();
+}
+
+export function createChatTools(context: {
+	db: D1Database;
+	filesBucket: R2Bucket;
+	uid: string;
+	chatId: string;
+	turnFiles: StoredFile[];
+}) {
 	return {
 		listChatFiles: tool({
 			description: "List files previously generated in this chat session.",
@@ -43,7 +64,7 @@ export function createChatTools(context: ChatToolContext) {
 				if (!file) {
 					return { found: false, error: "file not found" };
 				}
-				const baseMimeType = file.mimeType.split(";")[0].trim().toLowerCase();
+				const baseMimeType = normalizeMediaType(file.mimeType);
 				const readable =
 					baseMimeType.startsWith("text/") ||
 					baseMimeType === "application/json" ||
@@ -59,9 +80,6 @@ export function createChatTools(context: ChatToolContext) {
 						size: file.size,
 						error: "binary file cannot be decoded as UTF-8 text",
 					};
-				}
-				if (!file.r2Key) {
-					return { found: false, error: "file missing from storage" };
 				}
 				const object = await context.filesBucket.get(file.r2Key, {
 					range: { offset: 0, length: MAX_READABLE_TEXT_CHARS * 4 },
@@ -95,31 +113,45 @@ export function createChatTools(context: ChatToolContext) {
 				content: z.string(),
 			}),
 			execute: async ({ name, mimeType, content }) => {
-				if (context.generatedFilesCount() >= MAX_GENERATED_FILES) {
+				if (context.turnFiles.length >= MAX_GENERATED_FILES) {
 					return { created: false, error: "maximum generated file limit reached" };
 				}
+				const trimmedMimeType = mimeType.trim();
+				const slashIndex = trimmedMimeType.indexOf("/");
+				let validMimeType = slashIndex > 0 && slashIndex < trimmedMimeType.length - 1;
+				for (let index = 0; validMimeType && index < trimmedMimeType.length; index += 1) {
+					const code = trimmedMimeType.charCodeAt(index);
+					if (code < 0x20 || code > 0x7e) {
+						validMimeType = false;
+					}
+				}
+				const safeMimeType = validMimeType ? trimmedMimeType : "text/plain";
 				const encoded = new TextEncoder().encode(content);
 				if (encoded.byteLength > MAX_GENERATED_FILE_BYTES) {
 					return { created: false, error: "file exceeds maximum byte size" };
 				}
+
+				const baseMimeType = normalizeMediaType(safeMimeType);
+				const extension =
+					EXTENSION_BY_MIME_TYPE[baseMimeType] ??
+					(baseMimeType.split("/")[1]?.split("+")[0] || "bin");
 				const trimmedName = name.trim();
-				const fileName = trimmedName.includes(".")
-					? trimmedName
-					: `${trimmedName}.${extensionForMediaType(mimeType)}`;
+				const fileName = trimmedName.includes(".") ? trimmedName : `${trimmedName}.${extension}`;
+
 				const fileId = crypto.randomUUID();
-				const r2Key = buildFileR2Key(context.uid, context.chatId, fileId, fileName);
+				const r2Key = `users/${context.uid}/chats/${context.chatId}/${fileId}`;
 				await context.filesBucket.put(r2Key, encoded, {
-					httpMetadata: { contentType: mimeType },
+					httpMetadata: { contentType: safeMimeType },
 				});
 				const generatedFile: StoredFile = {
 					id: fileId,
 					name: fileName,
-					mimeType,
+					mimeType: safeMimeType,
 					size: encoded.byteLength,
 					r2Key,
 					createdAt: Date.now(),
 				};
-				context.onGeneratedFile(generatedFile);
+				context.turnFiles.push(generatedFile);
 				return {
 					created: true,
 					id: generatedFile.id,

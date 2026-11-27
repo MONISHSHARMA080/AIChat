@@ -4,39 +4,27 @@ import {
 	createGateway,
 	createUIMessageStreamResponse,
 	isStepCount,
+	isTextUIPart,
 	pruneMessages,
 	streamText,
 	toUIMessageStream,
 	type GenerateTextOnEndCallback,
 	type ToolSet,
-	type UIMessage,
 } from "ai";
-import {
-	MAX_AGENT_STEPS,
-	MAX_OUTPUT_TOKENS_CAP,
-	MIN_OUTPUT_RESERVE_TOKENS,
-	parseEnv,
-	PREVIEW_LENGTH,
-	runtimeConfigSchema,
-	TITLE_LENGTH,
-} from "../config/constants.ts";
-import { saveChatSummary } from "../repositories/chatRepository.ts";
-import {
-	deductCoinsForCost,
-	deductCoinsOrThrow,
-	getUserCoinBalance,
-} from "../services/billingService.ts";
+import { z } from "zod";
+import { parseEnv, runtimeConfigSchema, type RuntimeConfig } from "../env.ts";
+import { AppError } from "../errors.ts";
+import type { AuthUser } from "../middleware/firebaseAuth.ts";
+import { saveChatSummary, type ChatRow } from "../repositories/chatRepository.ts";
+import { deductCoinsOrThrow, getUserCoinBalance } from "../services/billingService.ts";
 import { fetchAvailableModels } from "../services/modelCatalogService.ts";
-import { gatewayCostSchema } from "../types/billing.ts";
-import {
-	chatTurnBodySchema,
-	type BillingRetryPayload,
-	type ChatAgentProps,
-	type StoredFile,
-} from "../types/chat.ts";
-import type { RuntimeConfig } from "../types/config.ts";
-import { AppError } from "../types/errors.ts";
-import { createChatTools } from "./tools.ts";
+import { createChatTools, type StoredFile } from "./tools.ts";
+
+const TITLE_LENGTH = 48;
+const PREVIEW_LENGTH = 200;
+const MAX_AGENT_STEPS = 6;
+const MIN_OUTPUT_RESERVE_TOKENS = 1024;
+const MAX_OUTPUT_TOKENS_CAP = 8192;
 
 const AGENT_INSTRUCTIONS =
 	"You are a concise, helpful AI assistant. You have tools to inspect chat files, create downloadable text files, and check the current time. Use tools only when they genuinely help answer the user's request.";
@@ -47,45 +35,56 @@ const BILLING_RETRY_OPTIONS = {
 	maxDelayMs: 3000,
 };
 
+const STREAM_TIMEOUT = {
+	totalMs: 300_000,
+	stepMs: 120_000,
+	chunkMs: 30_000,
+};
+
 const SESSION_STORAGE_KEY = "chat_session";
 
-function computeStepMaxOutputTokens(remainingUsd: number, outputPrice: number): number {
-	if (outputPrice <= 0) {
-		return MAX_OUTPUT_TOKENS_CAP;
-	}
-	const affordable = Math.floor(Math.max(0, remainingUsd) / outputPrice);
-	return Math.max(MIN_OUTPUT_RESERVE_TOKENS, Math.min(MAX_OUTPUT_TOKENS_CAP, affordable));
+const chatTurnBodySchema = z.object({
+	model: z.string().min(1),
+	reasoning: z
+		.enum(["provider-default", "none", "minimal", "low", "medium", "high", "xhigh", "max"])
+		.optional(),
+});
+
+const gatewayCostSchema = z.object({
+	gateway: z.object({
+		cost: z
+			.union([z.string().trim().min(1), z.number()])
+			.transform(Number)
+			.pipe(z.number().nonnegative()),
+	}),
+});
+
+export interface ChatAgentProps {
+	user: AuthUser;
+	chat: ChatRow;
 }
 
-function extractChatTitle(messages: UIMessage[]): string {
-	const firstUserMessage = messages.find((message) => message.role === "user");
-	const firstText = firstUserMessage?.parts
-		.filter((part): part is Extract<typeof part, { type: "text" }> => part.type === "text")
-		.map((part) => part.text)
-		.join("\n");
-	const firstLine = firstText
-		?.split("\n")
-		.map((line) => line.trim())
-		.find((line) => line.length > 0);
-	return (firstLine || "New chat").slice(0, TITLE_LENGTH);
+interface BillingRetryPayload {
+	uid: string;
+	gatewayCostUsd: number;
+	idempotencyKey: string;
 }
 
-export class ChatAgent extends AIChatAgent<Env, unknown, ChatAgentProps> {
+export class ChatAgent extends AIChatAgent<Env, ChatRow | null, ChatAgentProps> {
+	override initialState: ChatRow | null = null;
+
 	override async onStart(props?: ChatAgentProps): Promise<void> {
-		if (props?.user && props?.chatId) {
+		if (props?.user && props?.chat) {
 			await this.ctx.storage.put(SESSION_STORAGE_KEY, props);
+			if (!this.state) {
+				this.setState(props.chat);
+			}
 		}
 	}
 
 	async retryBillingDeduction(payload: BillingRetryPayload): Promise<void> {
 		const config = parseEnv(runtimeConfigSchema, this.env);
-		await deductCoinsOrThrow(
-			config,
-			payload.uid,
-			payload.userCoinBalance,
-			payload.gatewayCostUsd,
-			payload.idempotencyKey,
-		);
+		await deductCoinsOrThrow(config, payload.uid, payload.gatewayCostUsd, payload.idempotencyKey);
 	}
 
 	override async onChatMessage(
@@ -112,6 +111,7 @@ export class ChatAgent extends AIChatAgent<Env, unknown, ChatAgentProps> {
 				apiKey: config.AI_GATEWAY_API_KEY,
 				logoBaseUrl: config.LOGO_BASE_URL,
 				cacheTtlHours: config.MODEL_CACHE_TTL_HOURS,
+				ctx: this.ctx,
 			}),
 			getUserCoinBalance(config, session.user.uid),
 		]);
@@ -131,23 +131,19 @@ export class ChatAgent extends AIChatAgent<Env, unknown, ChatAgentProps> {
 			throw new AppError("resource-exhausted", "insufficient credits");
 		}
 
+		const chatId = session.chat.id;
 		const pricing = model.pricing;
 		const availableBudgetUsd = userCoinBalance * config.USD_PER_COIN;
 		const billingIdempotencyKey = crypto.randomUUID();
 		const turnFiles: StoredFile[] = [];
 		let completedStepsCostUsd = 0;
-		let completedStepsCount = 0;
 
 		const tools = createChatTools({
 			db: this.env.DB,
 			filesBucket: this.env.FILES_BUCKET,
 			uid: session.user.uid,
-			chatId: session.chatId,
+			chatId,
 			turnFiles,
-			onGeneratedFile: (file) => {
-				turnFiles.push(file);
-			},
-			generatedFilesCount: () => turnFiles.length,
 		});
 
 		const modelMessages = pruneMessages({
@@ -161,15 +157,23 @@ export class ChatAgent extends AIChatAgent<Env, unknown, ChatAgentProps> {
 			instructions: AGENT_INSTRUCTIONS,
 			messages: modelMessages,
 			tools,
-			maxOutputTokens: computeStepMaxOutputTokens(availableBudgetUsd, pricing.output),
+			timeout: STREAM_TIMEOUT,
 			stopWhen: [isStepCount(MAX_AGENT_STEPS), () => completedStepsCostUsd >= availableBudgetUsd],
-			prepareStep: () => ({
-				maxOutputTokens: computeStepMaxOutputTokens(
-					availableBudgetUsd - completedStepsCostUsd,
-					pricing.output,
-				),
-			}),
-			reasoning: reasoning as Parameters<typeof streamText>[0]["reasoning"],
+			prepareStep: () => {
+				const remainingUsd = availableBudgetUsd - completedStepsCostUsd;
+				const maxOutputTokens =
+					pricing.output <= 0
+						? MAX_OUTPUT_TOKENS_CAP
+						: Math.max(
+								MIN_OUTPUT_RESERVE_TOKENS,
+								Math.min(
+									MAX_OUTPUT_TOKENS_CAP,
+									Math.floor(Math.max(0, remainingUsd) / pricing.output),
+								),
+							);
+				return { maxOutputTokens };
+			},
+			reasoning,
 			abortSignal: options?.abortSignal,
 			providerOptions: {
 				gateway: { user: session.user.uid, tags: ["chat", "agent"] },
@@ -180,54 +184,95 @@ export class ChatAgent extends AIChatAgent<Env, unknown, ChatAgentProps> {
 					? parsed.data.gateway.cost
 					: (step.usage.inputTokens ?? 0) * pricing.input +
 						(step.usage.outputTokens ?? 0) * pricing.output;
-				completedStepsCount += 1;
 			},
 			onEnd: async (event) => {
-				let totalCostUsd = completedStepsCostUsd;
-				if (completedStepsCount === 0) {
-					const parsed = gatewayCostSchema.safeParse(event.finalStep.providerMetadata);
-					if (parsed.success) {
-						totalCostUsd = parsed.data.gateway.cost;
-					}
-				}
-				await this.billOrEnqueue(config, {
-					uid: session.user.uid,
-					userCoinBalance,
-					gatewayCostUsd: totalCostUsd,
-					idempotencyKey: billingIdempotencyKey,
-				});
-				const now = Date.now();
-				await saveChatSummary(this.env.DB, {
-					user: session.user,
-					chatId: session.chatId,
-					title: extractChatTitle(this.messages),
-					modelId: model.id,
-					preview: event.text.slice(0, PREVIEW_LENGTH) || (turnFiles.length > 0 ? "[file]" : ""),
-					at: now,
-					files: turnFiles.map((file) => ({
-						id: file.id,
-						messageId: options?.requestId ?? null,
-						chatId: session.chatId,
-						userId: session.user.uid,
-						name: file.name,
-						mimeType: file.mimeType,
-						size: file.size,
-						r2Key: file.r2Key,
-						createdAt: file.createdAt,
-					})),
-				});
-			},
-			onAbort: async () => {
-				if (completedStepsCostUsd > 0) {
+				try {
 					await this.billOrEnqueue(config, {
 						uid: session.user.uid,
-						userCoinBalance,
 						gatewayCostUsd: completedStepsCostUsd,
 						idempotencyKey: billingIdempotencyKey,
 					});
+				} catch (error) {
+					console.error(
+						JSON.stringify({
+							event: "billing_queue_failed",
+							uid: session.user.uid,
+							chatId,
+							error: error instanceof Error ? error.message : String(error),
+						}),
+					);
 				}
-				if (turnFiles.length > 0) {
-					await this.env.FILES_BUCKET.delete(turnFiles.map((file) => file.r2Key));
+
+				const firstUserMessage = this.messages.find((message) => message.role === "user");
+				const firstLine = firstUserMessage?.parts
+					.filter(isTextUIPart)
+					.map((part) => part.text)
+					.join("\n")
+					.split("\n")
+					.map((line) => line.trim())
+					.find((line) => line.length > 0);
+				const title = (firstLine || "New chat").slice(0, TITLE_LENGTH);
+				const now = Date.now();
+
+				try {
+					const updatedChat = await saveChatSummary(this.env.DB, {
+						user: session.user,
+						chatId,
+						title,
+						modelId: model.id,
+						preview: event.text.slice(0, PREVIEW_LENGTH) || (turnFiles.length > 0 ? "[file]" : ""),
+						at: now,
+						files: turnFiles.map((file) => ({
+							id: file.id,
+							messageId: options?.requestId ?? null,
+							chatId,
+							userId: session.user.uid,
+							name: file.name,
+							mimeType: file.mimeType,
+							size: file.size,
+							r2Key: file.r2Key,
+							createdAt: file.createdAt,
+						})),
+					});
+					if (updatedChat) {
+						this.setState(updatedChat);
+					}
+				} catch (error) {
+					console.error(
+						JSON.stringify({
+							event: "chat_summary_save_failed",
+							uid: session.user.uid,
+							chatId,
+							error: error instanceof Error ? error.message : String(error),
+						}),
+					);
+					if (turnFiles.length > 0) {
+						await this.env.FILES_BUCKET.delete(turnFiles.map((file) => file.r2Key));
+					}
+				}
+			},
+			onAbort: async () => {
+				try {
+					if (completedStepsCostUsd > 0) {
+						await this.billOrEnqueue(config, {
+							uid: session.user.uid,
+							gatewayCostUsd: completedStepsCostUsd,
+							idempotencyKey: billingIdempotencyKey,
+						});
+					}
+				} catch (error) {
+					console.error(
+						JSON.stringify({
+							event: "abort_billing_failed",
+							uid: session.user.uid,
+							chatId,
+							error: error instanceof Error ? error.message : String(error),
+						}),
+					);
+				} finally {
+					if (turnFiles.length > 0) {
+						await this.env.FILES_BUCKET.delete(turnFiles.map((file) => file.r2Key));
+					}
 				}
 			},
 		});
@@ -238,14 +283,18 @@ export class ChatAgent extends AIChatAgent<Env, unknown, ChatAgentProps> {
 	}
 
 	private async billOrEnqueue(config: RuntimeConfig, payload: BillingRetryPayload): Promise<void> {
-		const result = await deductCoinsForCost(
-			config,
-			payload.uid,
-			payload.userCoinBalance,
-			payload.gatewayCostUsd,
-			payload.idempotencyKey,
-		);
-		if (result.failed) {
+		try {
+			await deductCoinsOrThrow(config, payload.uid, payload.gatewayCostUsd, payload.idempotencyKey);
+		} catch (error) {
+			console.error(
+				JSON.stringify({
+					event: "billing_deduction_failed",
+					uid: payload.uid,
+					gatewayCostUsd: payload.gatewayCostUsd,
+					idempotencyKey: payload.idempotencyKey,
+					error: error instanceof Error ? error.message : String(error),
+				}),
+			);
 			await this.queue("retryBillingDeduction", payload, {
 				id: payload.idempotencyKey,
 				retry: BILLING_RETRY_OPTIONS,

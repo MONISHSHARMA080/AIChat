@@ -1,19 +1,73 @@
-import type {
-	ChatListCursor,
-	ChatListPage,
-	ChatRow,
-	FileRow,
-	SaveChatSummaryInput,
-} from "../types/database.ts";
+import type { AuthUser } from "../middleware/firebaseAuth.ts";
+import { prepareTouchUserStatement } from "./userRepository.ts";
+
+export interface ChatRow {
+	id: string;
+	userId: string;
+	title: string;
+	modelId: string;
+	createdAt: number;
+	updatedAt: number;
+	lastMessageText: string | null;
+	lastMessageAt: number | null;
+}
+
+export interface FileRow {
+	id: string;
+	messageId: string | null;
+	chatId: string;
+	userId: string;
+	name: string;
+	mimeType: string;
+	size: number;
+	r2Key: string;
+	createdAt: number;
+}
+
+export interface ChatListCursor {
+	updatedAt: number;
+	id: string;
+}
 
 const CHAT_COLUMNS =
 	"id, userId, title, modelId, createdAt, updatedAt, lastMessageText, lastMessageAt";
 const FILE_COLUMNS = "id, messageId, chatId, userId, name, mimeType, size, r2Key, createdAt";
 
-const UPSERT_USER_SQL =
-	"INSERT INTO users (uid, email, display_name, photo_url, phone_number, provider, email_verified, is_anonymous, tenant_id, created_at, updated_at, last_seen_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(uid) DO UPDATE SET email = COALESCE(excluded.email, users.email), display_name = COALESCE(excluded.display_name, users.display_name), photo_url = COALESCE(excluded.photo_url, users.photo_url), phone_number = COALESCE(excluded.phone_number, users.phone_number), provider = excluded.provider, email_verified = excluded.email_verified, is_anonymous = excluded.is_anonymous, tenant_id = COALESCE(excluded.tenant_id, users.tenant_id), updated_at = excluded.updated_at, last_seen_at = excluded.last_seen_at";
+const UPSERT_CHAT_SQL = `INSERT INTO chats (${CHAT_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET title = CASE WHEN chats.lastMessageAt IS NULL THEN excluded.title ELSE chats.title END, modelId = excluded.modelId, lastMessageText = excluded.lastMessageText, lastMessageAt = excluded.lastMessageAt, updatedAt = excluded.updatedAt WHERE chats.userId = excluded.userId RETURNING ${CHAT_COLUMNS}`;
 
-const UPSERT_CHAT_SQL = `INSERT INTO chats (${CHAT_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET modelId = excluded.modelId, lastMessageText = excluded.lastMessageText, lastMessageAt = excluded.lastMessageAt, updatedAt = excluded.updatedAt WHERE chats.userId = excluded.userId`;
+export async function createChat(
+	db: D1Database,
+	user: AuthUser,
+	modelId: string,
+): Promise<ChatRow> {
+	const now = Date.now();
+	const chat: ChatRow = {
+		id: crypto.randomUUID(),
+		userId: user.uid,
+		title: "New chat",
+		modelId,
+		createdAt: now,
+		updatedAt: now,
+		lastMessageText: null,
+		lastMessageAt: null,
+	};
+	await db.batch([
+		prepareTouchUserStatement(db, user, now),
+		db
+			.prepare(`INSERT INTO chats (${CHAT_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+			.bind(
+				chat.id,
+				chat.userId,
+				chat.title,
+				chat.modelId,
+				chat.createdAt,
+				chat.updatedAt,
+				chat.lastMessageText,
+				chat.lastMessageAt,
+			),
+	]);
+	return chat;
+}
 
 export async function getChatById(
 	db: D1Database,
@@ -46,7 +100,7 @@ export async function listChats(
 	userId: string,
 	limit: number,
 	cursor: ChatListCursor | null,
-): Promise<ChatListPage> {
+): Promise<{ chats: ChatRow[]; nextCursor: string | null }> {
 	const boundedLimit = Math.max(1, limit);
 	const queryLimit = boundedLimit + 1;
 	const statement = cursor
@@ -88,24 +142,20 @@ export async function getFileById(
 		.first<FileRow>();
 }
 
-export async function saveChatSummary(db: D1Database, input: SaveChatSummaryInput): Promise<void> {
+export async function saveChatSummary(
+	db: D1Database,
+	input: {
+		user: AuthUser;
+		chatId: string;
+		title: string;
+		modelId: string;
+		files: FileRow[];
+		preview: string;
+		at: number;
+	},
+): Promise<ChatRow | null> {
 	const statements: D1PreparedStatement[] = [
-		db
-			.prepare(UPSERT_USER_SQL)
-			.bind(
-				input.user.uid,
-				input.user.email,
-				input.user.displayName,
-				input.user.photoUrl,
-				input.user.phoneNumber,
-				input.user.provider,
-				input.user.emailVerified ? 1 : 0,
-				input.user.isAnonymous ? 1 : 0,
-				input.user.tenantId,
-				input.at,
-				input.at,
-				input.at,
-			),
+		prepareTouchUserStatement(db, input.user, input.at),
 		db
 			.prepare(UPSERT_CHAT_SQL)
 			.bind(
@@ -138,5 +188,7 @@ export async function saveChatSummary(db: D1Database, input: SaveChatSummaryInpu
 		);
 	}
 
-	await db.batch(statements);
+	const results = await db.batch(statements);
+	const chatRows = results[1]?.results as ChatRow[] | undefined;
+	return chatRows?.[0] ?? null;
 }
