@@ -37,6 +37,22 @@ CREATE TABLE IF NOT EXISTS message_files (
   createdAt INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS messages (
+    id TEXT NOT NULL,
+    chatId TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    reasoning TEXT,
+    parts TEXT NOT NULL DEFAULT '[]',
+    createdAt INTEGER NOT NULL,
+    status TEXT NOT NULL,
+    attachments TEXT NOT NULL DEFAULT '[]',
+    PRIMARY KEY (chatId, id)
+    );
+
+
 CREATE INDEX IF NOT EXISTS chats_user_id_updated_at_id ON chats (userId, updatedAt DESC, id DESC);
 CREATE INDEX IF NOT EXISTS message_files_chat_id ON message_files (chatId);
 CREATE INDEX IF NOT EXISTS message_files_user_id ON message_files (userId);
+CREATE INDEX IF NOT EXISTS messages_chat_id_created_at ON messages (chatId, createdAt);
+CREATE INDEX IF NOT EXISTS message_files_message_id ON message_files (messageId);

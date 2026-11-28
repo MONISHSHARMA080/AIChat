@@ -1,12 +1,15 @@
 import type { AuthUser } from "../types/auth.ts";
-import type { ChatListCursor, ChatRow, FileRow } from "../types/chat.ts";
+import type { ChatListCursor, ChatRow, FileRow, MessageRow } from "../types/chat.ts";
 import { prepareTouchUserStatement } from "./userRepository.ts";
 
 const CHAT_COLUMNS =
 	"id, userId, title, modelId, createdAt, updatedAt, lastMessageText, lastMessageAt";
+const MESSAGE_COLUMNS =
+	"id, chatId, role, content, reasoning, parts, createdAt, status, attachments";
 const FILE_COLUMNS = "id, messageId, chatId, userId, name, mimeType, size, r2Key, createdAt";
 
-const UPSERT_CHAT_SQL = `INSERT INTO chats (${CHAT_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET title = CASE WHEN chats.lastMessageAt IS NULL THEN excluded.title ELSE chats.title END, modelId = excluded.modelId, lastMessageText = excluded.lastMessageText, lastMessageAt = excluded.lastMessageAt, updatedAt = excluded.updatedAt WHERE chats.userId = excluded.userId RETURNING ${CHAT_COLUMNS}`;
+const UPSERT_CHAT_SQL = `INSERT INTO chats (${CHAT_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET modelId = excluded.modelId, lastMessageText = excluded.lastMessageText, lastMessageAt = excluded.lastMessageAt, updatedAt = excluded.updatedAt WHERE chats.userId = excluded.userId RETURNING ${CHAT_COLUMNS}`;
+const UPSERT_MESSAGE_SQL = `INSERT INTO messages (${MESSAGE_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(chatId, id) DO UPDATE SET content = excluded.content, reasoning = excluded.reasoning, parts = excluded.parts, status = excluded.status, attachments = CASE WHEN excluded.attachments = '[]' THEN messages.attachments ELSE excluded.attachments END`;
 
 export async function getChatById(
 	db: D1Database,
@@ -17,6 +20,24 @@ export async function getChatById(
 		.prepare(`SELECT ${CHAT_COLUMNS} FROM chats WHERE id = ? AND userId = ? LIMIT 1`)
 		.bind(chatId, userId)
 		.first<ChatRow>();
+}
+
+export async function listRecentChatMessages(
+	db: D1Database,
+	chatId: string,
+	limit: number,
+): Promise<MessageRow[]> {
+	const boundedLimit = Math.max(1, limit);
+	const result = await db
+		.prepare(
+			`SELECT ${MESSAGE_COLUMNS} FROM messages
+       WHERE chatId = ?
+       ORDER BY createdAt DESC, rowid DESC
+       LIMIT ?`,
+		)
+		.bind(chatId, boundedLimit)
+		.all<MessageRow>();
+	return result.results.reverse();
 }
 
 export async function getChatFilesMetadata(
@@ -95,13 +116,14 @@ export async function getChatFileById(
 		.first<FileRow>();
 }
 
-export async function saveChatSummary(
+export async function saveChatTurn(
 	db: D1Database,
 	input: {
 		user: AuthUser;
 		chatId: string;
 		title: string;
 		modelId: string;
+		messages: readonly MessageRow[];
 		files: readonly FileRow[];
 		preview: string;
 		at: number;
@@ -122,6 +144,24 @@ export async function saveChatSummary(
 				input.at,
 			),
 	];
+
+	for (const message of input.messages) {
+		statements.push(
+			db
+				.prepare(UPSERT_MESSAGE_SQL)
+				.bind(
+					message.id,
+					message.chatId,
+					message.role,
+					message.content,
+					message.reasoning,
+					message.parts,
+					message.createdAt,
+					message.status,
+					message.attachments,
+				),
+		);
+	}
 
 	for (const file of input.files) {
 		statements.push(

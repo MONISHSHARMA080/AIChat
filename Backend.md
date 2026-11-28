@@ -13,15 +13,15 @@ Cloudflare Worker in `worker/` that lets the user talk to any LLM through Vercel
 * **Worker `fetch()` + `handlers/`** — auth (`withFirebaseAuth`, supporting `Authorization: Bearer` and `?token=` on WebSocket upgrades), REST endpoints (`GET /health`, `GET /models`, `GET /usage`, `POST /auth/sync`, `GET /chats`, `GET /files/:fileId`), and routing `/agents/chat-agent{/:chatId}?{/*}?` to the user's DO (`${user.uid}:${chatId}`) via `getAgentByName`
 * the Worker handler only runs for REST calls and the initial WebSocket handshake — it should never stay awake waiting for an AI turn to finish
 * **`ChatAgent` (`extends AIChatAgent`)** — only owns the chat turn lifecycle and delegates everything else to `services/` and `repositories/`:
-  * `onStart`: store `{ user, chatId }` in DO storage and seed `this.state` from the existing D1 chat row when present
-  * `onChatMessage`: validate `{ model, reasoning }` and check credits via services, offload inline user `data:` files to R2, hydrate recent media + prune model messages, run `streamText` with tools, pipe through generated-file R2 offloading, and return `createUIMessageStreamResponse({ stream })`
-  * `onChatResponse`: deduct actual turn cost via `billingService` (fall back to `this.queue("retryBillingDeduction", ...)` if RevenueCat fails), upsert the chat summary + file rows in D1 only on success, update `this.setState(...)`, rewrite inline user `data:` URLs to `/files/:fileId` via `this.persistMessages(...)`, and clean up R2 files if the turn failed/aborted or D1 failed
+  * `onStart`: store `{ user, chatId }` in DO storage, seed `this.state` with `{ chatId, chat }`, and when `props.chat` exists with empty DO SQLite (`this.messages.length === 0`), hydrate recent messages from D1 via `this.persistMessages(...)`
+  * `onChatMessage`: validate `{ model, reasoning }` and check credits via services, offload inline user `data:` files to R2, hydrate recent media + prune model messages (`reasoning: "before-last-message"`, `toolCalls: "before-last-2-messages"`), run `streamText` with tools, pipe through generated-file R2 offloading, and return `createUIMessageStreamResponse({ stream })`
+  * `onChatResponse`: deduct actual turn cost via `billingService` (fall back to `this.queue("retryBillingDeduction", ...)` if RevenueCat fails), atomically upsert the chat summary, user + assistant messages (including reasoning trace and `UIMessage` parts), and file rows in D1 only on success, update `this.setState(...)`, rewrite inline user `data:` URLs to `/files/:fileId` via `this.persistMessages(...)`, and clean up R2 files if the turn failed/aborted or D1 failed
 
 ### Chats & state
 
 * client connects to `/agents/chat-agent` for a new chat (server generates a `chatId` and sends it in `this.state`) or `/agents/chat-agent/:chatId` for an existing chat
 * for an existing `chatId`, verify the chat exists for `user.uid` in D1 (404 otherwise); do not create a `chats` row in D1 until the first turn succeeds (no empty ghost chats)
-* DO SQLite (`this.messages`) is the source of truth for conversation history; D1 holds the user/chat index (`chats`) and file metadata (`message_files`)
+* D1 holds the global durable store (`chats`, `messages` with `reasoning` + `UIMessage` `parts`, `message_files`); DO SQLite (`this.messages`, capped at `maxPersistedMessages = 200`) holds the active session window and hydrates from D1 on cold start if empty
 
 ### Files
 

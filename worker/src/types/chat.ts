@@ -16,6 +16,25 @@ export interface ChatRow {
 	lastMessageAt: number | null;
 }
 
+export interface MessageAttachmentMetadata {
+	id: string;
+	name: string;
+	mimeType: string;
+	size: number;
+}
+
+export interface MessageRow {
+	id: string;
+	chatId: string;
+	role: "user" | "assistant" | "system";
+	content: string;
+	reasoning: string | null;
+	parts: string;
+	createdAt: number;
+	status: string;
+	attachments: string;
+}
+
 export interface FileRow {
 	id: string;
 	messageId: string | null;

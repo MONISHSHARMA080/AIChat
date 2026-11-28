@@ -8,16 +8,16 @@ import {
 	createGateway,
 	createUIMessageStreamResponse,
 	isStepCount,
-	isTextUIPart,
 	pruneMessages,
 	streamText,
 	toUIMessageStream,
 	type GenerateTextOnEndCallback,
+	type UIMessage,
 } from "ai";
 import { z } from "zod";
 import { parseEnv, runtimeConfigSchema, type RuntimeConfig } from "../env.ts";
 import { AppError, resolveOrThrowUnavailable } from "../errors.ts";
-import { saveChatSummary } from "../repositories/chatRepository.ts";
+import { listRecentChatMessages, saveChatTurn } from "../repositories/chatRepository.ts";
 import {
 	assertSufficientCredits,
 	computeStepMaxOutputTokens,
@@ -33,6 +33,11 @@ import {
 	offloadInlineUserFiles,
 	rewriteMessageFileUrls,
 } from "../services/chatMediaService.ts";
+import {
+	buildMessageRow,
+	extractMessageText,
+	hydrateUIMessagesFromRows,
+} from "../services/chatMessageService.ts";
 import { fetchAvailableModels, resolveChatModel } from "../services/modelCatalogService.ts";
 import type { AuthUser } from "../types/auth.ts";
 import type {
@@ -40,6 +45,7 @@ import type {
 	ChatAgentProps,
 	ChatAgentState,
 	ChatRow,
+	MessageRow,
 	StoredFile,
 } from "../types/chat.ts";
 import { createChatTools } from "./tools.ts";
@@ -47,11 +53,11 @@ import { createChatTools } from "./tools.ts";
 const TITLE_LENGTH = 48;
 const PREVIEW_LENGTH = 200;
 const MAX_AGENT_STEPS = 6;
+const MAX_PERSISTED_MESSAGES = 200;
 const MAX_CONTEXT_MESSAGES = 40;
 const CONTEXT_STORAGE_KEY = "chat_context";
 
-const AGENT_INSTRUCTIONS =
-	"You are a concise, helpful AI assistant. You have tools to inspect chat files, create downloadable text files, and check the current time. Use tools only when they genuinely help answer the user's request.";
+const AGENT_INSTRUCTIONS = "You are a concise, helpful AI assistant. You have tools to inspect chat files, create downloadable text files, and check the current time. Use tools only when they genuinely help answer the user's request.";
 
 const BILLING_RETRY_OPTIONS = {
 	maxAttempts: 5,
@@ -78,7 +84,8 @@ interface ChatContext {
 interface ActiveTurn {
 	context: ChatContext;
 	modelId: string;
-	userMessageId: string | null;
+	startedAt: number;
+	userMessage: UIMessage | null;
 	userText: string;
 	uploadedFiles: StoredFile[];
 	uploadedFilesByPartIndex: Map<number, StoredFile>;
@@ -97,6 +104,7 @@ function deriveChatTitle(text: string): string {
 
 export class ChatAgent extends AIChatAgent<Env, ChatAgentState | null, ChatAgentProps> {
 	override initialState: ChatAgentState | null = null;
+	override maxPersistedMessages = MAX_PERSISTED_MESSAGES;
 	private readonly activeTurns = new Map<string, ActiveTurn>();
 
 	override async onStart(props?: ChatAgentProps): Promise<void> {
@@ -109,6 +117,13 @@ export class ChatAgent extends AIChatAgent<Env, ChatAgentState | null, ChatAgent
 		});
 		if (!this.state || (props.chat && !this.state.chat)) {
 			this.setState({ chatId: props.chatId, chat: props.chat });
+		}
+		if (props.chat && this.messages.length === 0) {
+			const rows = await listRecentChatMessages(this.env.DB, props.chatId, MAX_PERSISTED_MESSAGES);
+			const hydratedMessages = await hydrateUIMessagesFromRows(rows);
+			if (hydratedMessages.length > 0) {
+				await this.persistMessages(hydratedMessages);
+			}
 		}
 	}
 
@@ -159,7 +174,9 @@ export class ChatAgent extends AIChatAgent<Env, ChatAgentState | null, ChatAgent
 			parsedBody.data.model,
 			parsedBody.data.reasoning,
 		);
-		const recentMessages = this.messages.slice(-MAX_CONTEXT_MESSAGES);
+		const rawRecentMessages = this.messages.slice(-MAX_CONTEXT_MESSAGES);
+		const firstUserIndex = rawRecentMessages.findIndex((message) => message.role === "user");
+		const recentMessages = firstUserIndex > 0 ? rawRecentMessages.slice(firstUserIndex) : rawRecentMessages;
 		const availableBudgetUsd = assertSufficientCredits({
 			coinBalance,
 			usdPerCoin: config.USD_PER_COIN,
@@ -167,15 +184,11 @@ export class ChatAgent extends AIChatAgent<Env, ChatAgentState | null, ChatAgent
 			messages: recentMessages,
 		});
 
+		const startedAt = Date.now();
 		const latestUserMessage = [...recentMessages]
 			.reverse()
 			.find((message) => message.role === "user");
-		const userText = latestUserMessage
-			? latestUserMessage.parts
-					.filter(isTextUIPart)
-					.map((part) => part.text)
-					.join("")
-			: "";
+		const userText = latestUserMessage ? extractMessageText(latestUserMessage) : "";
 		if (userText.length > MAX_USER_TEXT_CHARS) {
 			throw new AppError("invalid-argument", "message text exceeds maximum length");
 		}
@@ -196,6 +209,10 @@ export class ChatAgent extends AIChatAgent<Env, ChatAgentState | null, ChatAgent
 			const messagesWithFileUrls = latestUserMessage
 				? rewriteMessageFileUrls(recentMessages, latestUserMessage.id, offloaded.filesByPartIndex)
 				: recentMessages;
+			const storedUserMessage = latestUserMessage
+				? (messagesWithFileUrls.find((message) => message.id === latestUserMessage.id) ??
+					latestUserMessage)
+				: null;
 			const hydratedMessages = await hydrateModelMessages(messagesWithFileUrls, {
 				db: this.env.DB,
 				filesBucket: this.env.FILES_BUCKET,
@@ -203,17 +220,11 @@ export class ChatAgent extends AIChatAgent<Env, ChatAgentState | null, ChatAgent
 				chatId: context.chatId,
 				uploadedBytesById: offloaded.uploadedBytesById,
 			});
-			const modelMessages = pruneMessages({
-				messages: await convertToModelMessages(hydratedMessages),
-				reasoning: "all",
-				toolCalls: "before-last-4-messages",
-				emptyMessages: "remove",
-			});
-
 			const activeTurn: ActiveTurn = {
 				context,
 				modelId: model.id,
-				userMessageId: latestUserMessage?.id ?? null,
+				startedAt,
+				userMessage: storedUserMessage,
 				userText,
 				uploadedFiles: offloaded.uploadedFiles,
 				uploadedFilesByPartIndex: offloaded.filesByPartIndex,
@@ -229,6 +240,12 @@ export class ChatAgent extends AIChatAgent<Env, ChatAgentState | null, ChatAgent
 				chatId: context.chatId,
 				uploadedFiles: activeTurn.uploadedFiles,
 				generatedFiles: activeTurn.generatedFiles,
+			});
+
+			const modelMessages = pruneMessages({
+				messages: await convertToModelMessages(hydratedMessages, { tools }),
+				reasoning: "before-last-message",
+				toolCalls: "before-last-2-messages",
 			});
 
 			const result = streamText({
@@ -260,7 +277,6 @@ export class ChatAgent extends AIChatAgent<Env, ChatAgentState | null, ChatAgent
 			const stream = toUIMessageStream({
 				stream: result.stream,
 				tools,
-				sendReasoning: true,
 				sendSources: true,
 				onError: (error) => {
 					console.error(
@@ -330,28 +346,55 @@ export class ChatAgent extends AIChatAgent<Env, ChatAgentState | null, ChatAgent
 			return;
 		}
 
-		const responseText = result.message.parts
-			.filter(isTextUIPart)
-			.map((part) => part.text)
-			.join("");
+		const persistedAssistantMessage = this.messages.find(
+			(message) => message.id === result.message.id,
+		);
+		const assistantMessage = persistedAssistantMessage ?? result.message;
+		const completedAt = Math.max(Date.now(), turn.startedAt + 1);
+		const responseText = extractMessageText(assistantMessage);
 		const preview =
 			responseText.slice(0, PREVIEW_LENGTH) || (generatedFiles.length > 0 ? "[file]" : "");
 
+		const turnMessages: MessageRow[] = [];
+		if (!result.continuation && turn.userMessage) {
+			turnMessages.push(
+				buildMessageRow({
+					chatId: turn.context.chatId,
+					message: turn.userMessage,
+					createdAt: turn.startedAt,
+					status: "DONE",
+					files: turn.uploadedFiles,
+				}),
+			);
+		}
+		if (persistedAssistantMessage && persistedAssistantMessage.parts.length > 0) {
+			turnMessages.push(
+				buildMessageRow({
+					chatId: turn.context.chatId,
+					message: persistedAssistantMessage,
+					createdAt: completedAt,
+					status: "DONE",
+					files: generatedFiles,
+				}),
+			);
+		}
+
 		let updatedChat: ChatRow | null;
 		try {
-			updatedChat = await saveChatSummary(this.env.DB, {
+			updatedChat = await saveChatTurn(this.env.DB, {
 				user: turn.context.user,
 				chatId: turn.context.chatId,
 				title: deriveChatTitle(turn.userText),
 				modelId: turn.modelId,
 				preview,
-				at: Date.now(),
+				at: completedAt,
+				messages: turnMessages,
 				files: turnFiles,
 			});
 		} catch (error) {
 			console.error(
 				JSON.stringify({
-					event: "chat_summary_save_failed",
+					event: "chat_turn_save_failed",
 					uid: turn.context.user.uid,
 					chatId: turn.context.chatId,
 					error: error instanceof Error ? error.message : String(error),
@@ -365,9 +408,13 @@ export class ChatAgent extends AIChatAgent<Env, ChatAgentState | null, ChatAgent
 			this.setState({ chatId: updatedChat.id, chat: updatedChat });
 		}
 
-		if (turn.userMessageId && turn.uploadedFilesByPartIndex.size > 0) {
+		if (
+			turn.userMessage &&
+			turn.uploadedFilesByPartIndex.size > 0 &&
+			(await this.waitUntilStable({ timeout: 5_000 }))
+		) {
 			await this.persistMessages(
-				rewriteMessageFileUrls(this.messages, turn.userMessageId, turn.uploadedFilesByPartIndex),
+				rewriteMessageFileUrls(this.messages, turn.userMessage.id, turn.uploadedFilesByPartIndex),
 			);
 		}
 	}
