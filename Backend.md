@@ -10,7 +10,7 @@ Cloudflare Worker in `worker/` that lets the user talk to any LLM through Vercel
 
 ### Worker handler vs Agent split
 
-* **Worker `fetch()` + `handlers/`** — auth (`withFirebaseAuth`, supporting `Authorization: Bearer` and `?token=` on WebSocket upgrades), REST endpoints (`GET /health`, `GET /models`, `GET /usage`, `POST /auth/sync`, `GET /chats`, `GET /chats/:chatId/messages`, `GET /files/:fileId`), and routing `/agents/chat-agent/:chatId{/*}?` to the user's DO (`${user.uid}:${chatId}`) via `getAgentByName`
+* **Worker `fetch()` + `handlers/`** — auth (`withFirebaseAuth`, supporting `Authorization: Bearer` and `?token=` on WebSocket upgrades), REST endpoints (`GET /health`, `GET /models`, `GET /usage`, `POST /auth/sync`, `GET /chats`, `GET /files/:fileId`), and routing `/agents/chat-agent/:chatId{/*}?` to the user's DO (`${user.uid}:${chatId}`) via `getAgentByName`
 * the Worker handler only runs for REST calls and the initial WebSocket handshake — it should never stay awake waiting for an AI turn to finish
 * **`ChatAgent` (`extends AIChatAgent`)** — only owns the chat turn lifecycle and delegates everything else to `services/` and `repositories/`:
   * `onStart`: store `{ user, chatId }` in DO storage and seed `this.state` from the existing D1 chat row when present

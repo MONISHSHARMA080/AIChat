@@ -1,13 +1,11 @@
-import { getAgentByName } from "agents";
 import { z } from "zod";
 import { AppError } from "../errors.ts";
-import { getChatById, getChatOwnerId, listChats } from "../repositories/chatRepository.ts";
+import { listChats } from "../repositories/chatRepository.ts";
 import type { AuthUser } from "../types/auth.ts";
-import type { ChatAgentProps, ChatListCursor } from "../types/chat.ts";
+import type { ChatListCursor } from "../types/chat.ts";
 
 const DEFAULT_CHAT_LIST_LIMIT = 20;
 const MAX_CHAT_LIST_LIMIT = 50;
-const MAX_CHAT_ID_LENGTH = 128;
 
 const chatListLimitSchema = z
 	.string()
@@ -30,28 +28,6 @@ const chatListCursorSchema = z.string().transform((value, ctx): ChatListCursor =
 	}
 	return { updatedAt, id: value.slice(separatorIndex + 1) };
 });
-
-export async function handleChatAgentRequest(
-	request: Request,
-	env: Env,
-	user: AuthUser,
-	chatId: string,
-): Promise<Response> {
-	const trimmedChatId = chatId.trim();
-	if (!trimmedChatId || trimmedChatId.length > MAX_CHAT_ID_LENGTH) {
-		throw new AppError("invalid-argument", "invalid chat id");
-	}
-	const ownerId = await getChatOwnerId(env.DB, trimmedChatId);
-	if (ownerId && ownerId !== user.uid) {
-		throw new AppError("not-found", "chat not found");
-	}
-	const chat = ownerId ? await getChatById(env.DB, user.uid, trimmedChatId) : null;
-	const props: ChatAgentProps = { user, chatId: trimmedChatId, chat };
-	const agentStub = await getAgentByName(env.CHAT_AGENT, `${user.uid}:${trimmedChatId}`, {
-		props,
-	});
-	return agentStub.fetch(request);
-}
 
 export async function handleListChatsRequest(
 	request: Request,
@@ -85,22 +61,4 @@ export async function handleListChatsRequest(
 
 	const page = await listChats(env.DB, user.uid, limit, cursor);
 	return Response.json(page);
-}
-
-export async function handleGetChatMessagesRequest(
-	env: Env,
-	user: AuthUser,
-	chatId: string,
-): Promise<Response> {
-	const trimmedChatId = chatId.trim();
-	if (!trimmedChatId) {
-		throw new AppError("invalid-argument", "invalid chat id");
-	}
-	const chat = await getChatById(env.DB, user.uid, trimmedChatId);
-	if (!chat) {
-		throw new AppError("not-found", "chat not found");
-	}
-	const props: ChatAgentProps = { user, chatId: chat.id, chat };
-	const agentStub = await getAgentByName(env.CHAT_AGENT, `${user.uid}:${chat.id}`, { props });
-	return agentStub.fetch("https://chat-agent/get-messages");
 }

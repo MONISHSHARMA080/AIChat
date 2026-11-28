@@ -6,5 +6,8 @@ export default defineConfig({
 	fmt: { useTabs: true },
 	lint: {
 		options: { typeAware: true, typeCheck: true },
+		rules: {
+			"typescript/no-deprecated": "error",
+		},
 	},
 });

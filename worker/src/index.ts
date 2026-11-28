@@ -1,10 +1,7 @@
 import { AppError } from "./errors.ts";
 import { handleSyncUserRequest } from "./handlers/authHandler.ts";
-import {
-	handleChatAgentRequest,
-	handleGetChatMessagesRequest,
-	handleListChatsRequest,
-} from "./handlers/chatHandler.ts";
+import { handleChatAgentRequest } from "./handlers/chatAgentHandler.ts";
+import { handleListChatsRequest } from "./handlers/chatListHandler.ts";
 import { handleGetFileRequest } from "./handlers/filesHandler.ts";
 import { handleListModelsRequest } from "./handlers/modelsHandler.ts";
 import { handleGetUsageRequest } from "./handlers/usageHandler.ts";
@@ -18,7 +15,6 @@ const USAGE_ROUTE = new URLPattern({ pathname: "/usage{/}?" });
 const MODELS_ROUTE = new URLPattern({ pathname: "/models{/}?" });
 const CHAT_AGENT_ROUTE = new URLPattern({ pathname: "/agents/chat-agent/:chatId{/*}?" });
 const CHATS_ROUTE = new URLPattern({ pathname: "/chats{/}?" });
-const CHAT_MESSAGES_ROUTE = new URLPattern({ pathname: "/chats/:chatId/messages{/}?" });
 const FILE_ROUTE = new URLPattern({ pathname: "/files/:fileId{/}?" });
 
 function errorResponse(status: number, code: string, message: string): Response {
@@ -86,18 +82,6 @@ export default {
 						return errorResponse(405, "invalid-argument", "method not allowed");
 					}
 					return await handleListChatsRequest(request, env, user);
-				}
-
-				const chatMessagesMatch = CHAT_MESSAGES_ROUTE.exec(pathname);
-				if (chatMessagesMatch) {
-					if (request.method !== "GET") {
-						return errorResponse(405, "invalid-argument", "method not allowed");
-					}
-					return await handleGetChatMessagesRequest(
-						env,
-						user,
-						decodeParam(chatMessagesMatch.pathname.groups.chatId),
-					);
 				}
 
 				const fileMatch = FILE_ROUTE.exec(pathname);

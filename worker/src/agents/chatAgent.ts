@@ -12,8 +12,7 @@ import {
 	pruneMessages,
 	streamText,
 	toUIMessageStream,
-	type GenerateTextOnFinishCallback,
-	type ToolSet,
+	type GenerateTextOnEndCallback,
 } from "ai";
 import { z } from "zod";
 import { parseEnv, runtimeConfigSchema, type RuntimeConfig } from "../env.ts";
@@ -113,7 +112,7 @@ export class ChatAgent extends AIChatAgent<Env, ChatRow | null, ChatAgentProps> 
 	}
 
 	override async onChatMessage(
-		_onFinish: GenerateTextOnFinishCallback<ToolSet>,
+		_onFinish: GenerateTextOnEndCallback,
 		options?: OnChatMessageOptions,
 	): Promise<Response> {
 		const context = await this.ctx.storage.get<ChatContext>(CONTEXT_STORAGE_KEY);
