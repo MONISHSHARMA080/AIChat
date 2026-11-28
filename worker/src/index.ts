@@ -13,7 +13,7 @@ const HEALTH_ROUTE = new URLPattern({ pathname: "/health{/}?" });
 const AUTH_SYNC_ROUTE = new URLPattern({ pathname: "/auth/sync{/}?" });
 const USAGE_ROUTE = new URLPattern({ pathname: "/usage{/}?" });
 const MODELS_ROUTE = new URLPattern({ pathname: "/models{/}?" });
-const CHAT_AGENT_ROUTE = new URLPattern({ pathname: "/agents/chat-agent/:chatId{/*}?" });
+const CHAT_AGENT_ROUTE = new URLPattern({ pathname: "/agents/chat-agent{/:chatId}?{/*}?" });
 const CHATS_ROUTE = new URLPattern({ pathname: "/chats{/}?" });
 const FILE_ROUTE = new URLPattern({ pathname: "/files/:fileId{/}?" });
 
@@ -69,11 +69,12 @@ export default {
 
 				const chatAgentMatch = CHAT_AGENT_ROUTE.exec(pathname);
 				if (chatAgentMatch) {
+					const rawChatId = chatAgentMatch.pathname.groups.chatId;
 					return await handleChatAgentRequest(
 						request,
 						env,
 						user,
-						decodeParam(chatAgentMatch.pathname.groups.chatId),
+						rawChatId ? decodeParam(rawChatId) : null,
 					);
 				}
 

@@ -10,7 +10,7 @@ Cloudflare Worker in `worker/` that lets the user talk to any LLM through Vercel
 
 ### Worker handler vs Agent split
 
-* **Worker `fetch()` + `handlers/`** — auth (`withFirebaseAuth`, supporting `Authorization: Bearer` and `?token=` on WebSocket upgrades), REST endpoints (`GET /health`, `GET /models`, `GET /usage`, `POST /auth/sync`, `GET /chats`, `GET /files/:fileId`), and routing `/agents/chat-agent/:chatId{/*}?` to the user's DO (`${user.uid}:${chatId}`) via `getAgentByName`
+* **Worker `fetch()` + `handlers/`** — auth (`withFirebaseAuth`, supporting `Authorization: Bearer` and `?token=` on WebSocket upgrades), REST endpoints (`GET /health`, `GET /models`, `GET /usage`, `POST /auth/sync`, `GET /chats`, `GET /files/:fileId`), and routing `/agents/chat-agent{/:chatId}?{/*}?` to the user's DO (`${user.uid}:${chatId}`) via `getAgentByName`
 * the Worker handler only runs for REST calls and the initial WebSocket handshake — it should never stay awake waiting for an AI turn to finish
 * **`ChatAgent` (`extends AIChatAgent`)** — only owns the chat turn lifecycle and delegates everything else to `services/` and `repositories/`:
   * `onStart`: store `{ user, chatId }` in DO storage and seed `this.state` from the existing D1 chat row when present
@@ -19,8 +19,8 @@ Cloudflare Worker in `worker/` that lets the user talk to any LLM through Vercel
 
 ### Chats & state
 
-* client connects to `/agents/chat-agent/:chatId` (fresh UUID for a new chat, existing `chatId` to continue one)
-* reject if that `chatId` already belongs to another user in D1; do not create a `chats` row in D1 until the first turn succeeds (no empty ghost chats)
+* client connects to `/agents/chat-agent` for a new chat (server generates a `chatId` and sends it in `this.state`) or `/agents/chat-agent/:chatId` for an existing chat
+* for an existing `chatId`, verify the chat exists for `user.uid` in D1 (404 otherwise); do not create a `chats` row in D1 until the first turn succeeds (no empty ghost chats)
 * DO SQLite (`this.messages`) is the source of truth for conversation history; D1 holds the user/chat index (`chats`) and file metadata (`message_files`)
 
 ### Files

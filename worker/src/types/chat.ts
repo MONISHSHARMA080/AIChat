@@ -43,6 +43,11 @@ export interface ChatAgentProps {
 	chat: ChatRow | null;
 }
 
+export interface ChatAgentState {
+	chatId: string;
+	chat: ChatRow | null;
+}
+
 export interface BillingRetryPayload {
 	uid: string;
 	gatewayCostUsd: number;

@@ -35,7 +35,13 @@ import {
 } from "../services/chatMediaService.ts";
 import { fetchAvailableModels, resolveChatModel } from "../services/modelCatalogService.ts";
 import type { AuthUser } from "../types/auth.ts";
-import type { BillingRetryPayload, ChatAgentProps, ChatRow, StoredFile } from "../types/chat.ts";
+import type {
+	BillingRetryPayload,
+	ChatAgentProps,
+	ChatAgentState,
+	ChatRow,
+	StoredFile,
+} from "../types/chat.ts";
 import { createChatTools } from "./tools.ts";
 
 const TITLE_LENGTH = 48;
@@ -89,8 +95,8 @@ function deriveChatTitle(text: string): string {
 	return (firstLine || "New chat").slice(0, TITLE_LENGTH);
 }
 
-export class ChatAgent extends AIChatAgent<Env, ChatRow | null, ChatAgentProps> {
-	override initialState: ChatRow | null = null;
+export class ChatAgent extends AIChatAgent<Env, ChatAgentState | null, ChatAgentProps> {
+	override initialState: ChatAgentState | null = null;
 	private readonly activeTurns = new Map<string, ActiveTurn>();
 
 	override async onStart(props?: ChatAgentProps): Promise<void> {
@@ -101,8 +107,8 @@ export class ChatAgent extends AIChatAgent<Env, ChatRow | null, ChatAgentProps> 
 			user: props.user,
 			chatId: props.chatId,
 		});
-		if (props.chat && !this.state) {
-			this.setState(props.chat);
+		if (!this.state || (props.chat && !this.state.chat)) {
+			this.setState({ chatId: props.chatId, chat: props.chat });
 		}
 	}
 
@@ -356,7 +362,7 @@ export class ChatAgent extends AIChatAgent<Env, ChatRow | null, ChatAgentProps> 
 		}
 
 		if (updatedChat) {
-			this.setState(updatedChat);
+			this.setState({ chatId: updatedChat.id, chat: updatedChat });
 		}
 
 		if (turn.userMessageId && turn.uploadedFilesByPartIndex.size > 0) {
