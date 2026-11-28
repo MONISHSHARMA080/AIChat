@@ -29,20 +29,30 @@ const firebaseJwks = createRemoteJWKSet(new URL(FIREBASE_JWKS_URL), {
 	cooldownDuration: JWKS_REFRESH_COOLDOWN_MS,
 });
 
+function extractAuthToken(request: Request): string {
+	const authorizationHeader = request.headers.get("Authorization")?.trim() ?? "";
+	if (authorizationHeader.slice(0, 7).toLowerCase() === "bearer ") {
+		const headerToken = authorizationHeader.slice(7).trim();
+		if (headerToken) {
+			return headerToken;
+		}
+	}
+	if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
+		const queryToken = new URL(request.url).searchParams.get("token")?.trim() ?? "";
+		if (queryToken) {
+			return queryToken;
+		}
+	}
+	throw new AppError("unauthenticated", "sign in required");
+}
+
 export async function withFirebaseAuth(
 	request: Request,
 	env: Env,
 	next: (user: AuthUser) => Promise<Response>,
 ): Promise<Response> {
 	const { FIREBASE_PROJECT_ID } = parseEnv(firebaseAuthConfigSchema, env);
-	const authorizationHeader = request.headers.get("Authorization")?.trim() ?? "";
-	if (authorizationHeader.slice(0, 7).toLowerCase() !== "bearer ") {
-		throw new AppError("unauthenticated", "sign in required");
-	}
-	const token = authorizationHeader.slice(7).trim();
-	if (!token) {
-		throw new AppError("unauthenticated", "sign in required");
-	}
+	const token = extractAuthToken(request);
 
 	let payload: FirebaseJwtPayload;
 	let kid: unknown;

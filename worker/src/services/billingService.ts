@@ -204,22 +204,24 @@ export function assertSufficientCredits(input: {
 	coinBalance: number;
 	usdPerCoin: number;
 	pricing: ModelPricing;
-	recentHistory: readonly UIMessage[];
-	userText: string;
-	newAttachmentCount: number;
+	messages: readonly UIMessage[];
 }): number {
 	const availableBudgetUsd = input.coinBalance * input.usdPerCoin;
-	let textChars = input.userText.length;
-	let mediaCount = input.newAttachmentCount;
-	const historyMediaStart = Math.max(0, input.recentHistory.length - MAX_CONTEXT_MEDIA_TURNS * 2);
+	let textChars = 0;
+	let mediaCount = 0;
+	const mediaWindowStart = Math.max(0, input.messages.length - (MAX_CONTEXT_MEDIA_TURNS * 2 + 1));
 
-	for (let index = 0; index < input.recentHistory.length; index += 1) {
-		const message = input.recentHistory[index];
-		const inMediaWindow = index >= historyMediaStart;
+	for (let index = 0; index < input.messages.length; index += 1) {
+		const message = input.messages[index];
+		const inMediaWindow = index >= mediaWindowStart;
 		for (const part of message.parts) {
 			if (isTextUIPart(part)) {
 				textChars += part.text.length;
-			} else if (inMediaWindow && isFileUIPart(part) && extractFileIdFromUrl(part.url)) {
+			} else if (
+				inMediaWindow &&
+				isFileUIPart(part) &&
+				(part.url.startsWith("data:") || extractFileIdFromUrl(part.url) !== null)
+			) {
 				mediaCount += 1;
 			}
 		}

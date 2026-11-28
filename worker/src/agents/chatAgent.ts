@@ -1,41 +1,49 @@
-import { Agent, type AgentContext } from "agents";
-import { Sessions, type SessionMessage } from "agents/sessions";
+import {
+	AIChatAgent,
+	type ChatResponseResult,
+	type OnChatMessageOptions,
+} from "@cloudflare/ai-chat";
 import {
 	convertToModelMessages,
 	createGateway,
-	createUIMessageStream,
 	createUIMessageStreamResponse,
 	isStepCount,
 	isTextUIPart,
 	pruneMessages,
 	streamText,
 	toUIMessageStream,
-	type UIMessage,
+	type GenerateTextOnFinishCallback,
+	type ToolSet,
 } from "ai";
+import { z } from "zod";
 import { parseEnv, runtimeConfigSchema, type RuntimeConfig } from "../env.ts";
-import { AppError } from "../errors.ts";
+import { AppError, resolveOrThrowUnavailable } from "../errors.ts";
 import { saveChatSummary } from "../repositories/chatRepository.ts";
 import {
 	assertSufficientCredits,
 	computeStepMaxOutputTokens,
 	deductCoinsOrThrow,
 	extractStepCostUsd,
+	getUserCoinBalance,
 } from "../services/billingService.ts";
 import {
 	createGeneratedFileOffloadStream,
-	decodeAttachments,
 	deleteFilesFromR2,
 	hydrateModelMessages,
-	uploadDecodedAttachments,
+	MAX_USER_TEXT_CHARS,
+	offloadInlineUserFiles,
+	rewriteMessageFileUrls,
 } from "../services/chatMediaService.ts";
-import type { ChatTurnPayload, StoredFile } from "../types/chat.ts";
+import { fetchAvailableModels, resolveChatModel } from "../services/modelCatalogService.ts";
+import type { AuthUser } from "../types/auth.ts";
+import type { BillingRetryPayload, ChatAgentProps, ChatRow, StoredFile } from "../types/chat.ts";
 import { createChatTools } from "./tools.ts";
 
 const TITLE_LENGTH = 48;
 const PREVIEW_LENGTH = 200;
 const MAX_AGENT_STEPS = 6;
 const MAX_CONTEXT_MESSAGES = 40;
-const SSE_KEEP_ALIVE_MS = 15_000;
+const CONTEXT_STORAGE_KEY = "chat_context";
 
 const AGENT_INSTRUCTIONS =
 	"You are a concise, helpful AI assistant. You have tools to inspect chat files, create downloadable text files, and check the current time. Use tools only when they genuinely help answer the user's request.";
@@ -52,30 +60,26 @@ const STREAM_TIMEOUT = {
 	chunkMs: 30_000,
 };
 
-interface BillingRetryPayload {
-	uid: string;
-	gatewayCostUsd: number;
-	idempotencyKey: string;
+const turnBodySchema = z.object({
+	model: z.string().trim().min(1).max(128),
+	reasoning: z.string().trim().min(1).max(64).optional(),
+});
+
+interface ChatContext {
+	user: AuthUser;
+	chatId: string;
 }
 
-function buildUserMessage(
-	id: string,
-	text: string,
-	uploadedFiles: readonly StoredFile[],
-): UIMessage {
-	const parts: UIMessage["parts"] = [];
-	if (text.trim().length > 0) {
-		parts.push({ type: "text", text });
-	}
-	for (const file of uploadedFiles) {
-		parts.push({
-			type: "file",
-			mediaType: file.mimeType,
-			filename: file.name,
-			url: file.url,
-		});
-	}
-	return { id, role: "user", parts };
+interface ActiveTurn {
+	context: ChatContext;
+	modelId: string;
+	userMessageId: string | null;
+	userText: string;
+	uploadedFiles: StoredFile[];
+	uploadedFilesByPartIndex: Map<number, StoredFile>;
+	generatedFiles: StoredFile[];
+	completedStepsCostUsd: number;
+	billingIdempotencyKey: string;
 }
 
 function deriveChatTitle(text: string): string {
@@ -86,14 +90,21 @@ function deriveChatTitle(text: string): string {
 	return (firstLine || "New chat").slice(0, TITLE_LENGTH);
 }
 
-export class ChatAgent extends Agent<Env> {
-	readonly sessions = new Sessions();
-	private readonly session = this.sessions.session();
-	private turnInFlight = false;
+export class ChatAgent extends AIChatAgent<Env, ChatRow | null, ChatAgentProps> {
+	override initialState: ChatRow | null = null;
+	private readonly activeTurns = new Map<string, ActiveTurn>();
 
-	constructor(ctx: AgentContext, env: Env) {
-		super(ctx, env);
-		this.lifecycle.use(this.sessions);
+	override async onStart(props?: ChatAgentProps): Promise<void> {
+		if (!props) {
+			return;
+		}
+		await this.ctx.storage.put<ChatContext>(CONTEXT_STORAGE_KEY, {
+			user: props.user,
+			chatId: props.chatId,
+		});
+		if (props.chat && !this.state) {
+			this.setState(props.chat);
+		}
 	}
 
 	async retryBillingDeduction(payload: BillingRetryPayload): Promise<void> {
@@ -101,143 +112,91 @@ export class ChatAgent extends Agent<Env> {
 		await deductCoinsOrThrow(config, payload.uid, payload.gatewayCostUsd, payload.idempotencyKey);
 	}
 
-	override async onRequest(request: Request): Promise<Response> {
-		try {
-			const pathname = new URL(request.url).pathname;
-			if (request.method === "GET" && pathname === "/messages") {
-				return this.streamMessagesResponse(request.signal);
-			}
-			if (request.method === "POST" && pathname === "/turn") {
-				return await this.handleChatTurn(request);
-			}
-			return Response.json(
-				{ error: { code: "not-found", message: "route not found" } },
-				{ status: 404 },
-			);
-		} catch (error) {
-			if (error instanceof AppError) {
-				return Response.json(
-					{ error: { code: error.code, message: error.message } },
-					{ status: error.status },
-				);
-			}
-			console.error(
-				JSON.stringify({
-					event: "chat_agent_request_error",
-					error: error instanceof Error ? error.message : String(error),
+	override async onChatMessage(
+		_onFinish: GenerateTextOnFinishCallback<ToolSet>,
+		options?: OnChatMessageOptions,
+	): Promise<Response> {
+		const context = await this.ctx.storage.get<ChatContext>(CONTEXT_STORAGE_KEY);
+		if (!context) {
+			throw new AppError("unauthenticated", "missing chat session context");
+		}
+
+		const parsedBody = turnBodySchema.safeParse(options?.body);
+		if (!parsedBody.success) {
+			const formattedIssues = parsedBody.error.issues
+				.map((issue) => {
+					const path = issue.path.map(String).join(".");
+					return path ? `${path}: ${issue.message}` : issue.message;
+				})
+				.join("; ");
+			throw new AppError("invalid-argument", formattedIssues || "invalid chat payload");
+		}
+
+		const config = parseEnv(runtimeConfigSchema, this.env);
+		const [availableModels, coinBalance] = await Promise.all([
+			resolveOrThrowUnavailable(
+				fetchAvailableModels({
+					apiKey: config.AI_GATEWAY_API_KEY,
+					logoBaseUrl: config.LOGO_BASE_URL,
+					cacheTtlHours: config.MODEL_CACHE_TTL_HOURS,
+					ctx: this.ctx,
 				}),
-			);
-			return Response.json(
-				{ error: { code: "internal", message: "internal error" } },
-				{ status: 500 },
-			);
-		}
-	}
+				"models are temporarily unavailable",
+			),
+			resolveOrThrowUnavailable(
+				getUserCoinBalance(config, context.user.uid),
+				"balance is temporarily unavailable",
+			),
+		]);
 
-	private streamMessagesResponse(signal: AbortSignal): Response {
-		const encoder = new TextEncoder();
-		const iterator = this.session.historyBatches({ signal })[Symbol.asyncIterator]();
-		let started = false;
-		let wroteMessage = false;
-
-		const stream = new ReadableStream<Uint8Array>({
-			pull: async (controller) => {
-				if (!started) {
-					started = true;
-					controller.enqueue(encoder.encode("["));
-				}
-				while (true) {
-					const next = await iterator.next();
-					if (next.done) {
-						controller.enqueue(encoder.encode("]"));
-						controller.close();
-						return;
-					}
-					if (next.value.length === 0) {
-						continue;
-					}
-					let chunk = "";
-					for (const message of next.value) {
-						chunk += (wroteMessage ? "," : "") + JSON.stringify(message);
-						wroteMessage = true;
-					}
-					controller.enqueue(encoder.encode(chunk));
-					return;
-				}
-			},
-			cancel: async () => {
-				await iterator.return?.();
-			},
+		const model = resolveChatModel(
+			availableModels,
+			parsedBody.data.model,
+			parsedBody.data.reasoning,
+		);
+		const recentMessages = this.messages.slice(-MAX_CONTEXT_MESSAGES);
+		const availableBudgetUsd = assertSufficientCredits({
+			coinBalance,
+			usdPerCoin: config.USD_PER_COIN,
+			pricing: model.pricing,
+			messages: recentMessages,
 		});
 
-		return new Response(stream, {
-			status: 200,
-			headers: {
-				"Content-Type": "application/json; charset=utf-8",
-				"Cache-Control": "no-store",
-			},
-		});
-	}
-
-	private async loadRecentContextMessages(limit: number): Promise<UIMessage[]> {
-		const messages: UIMessage[] = [];
-		for await (const message of this.session.history({ newestFirst: true })) {
-			if (message.role === "user" || message.role === "assistant" || message.role === "system") {
-				messages.push(message as unknown as UIMessage);
-				if (messages.length >= limit) {
-					break;
-				}
-			}
-		}
-		messages.reverse();
-		return messages;
-	}
-
-	private async handleChatTurn(request: Request): Promise<Response> {
-		if (this.turnInFlight) {
-			throw new AppError("conflict", "another response is already in progress for this chat");
+		const latestUserMessage = [...recentMessages]
+			.reverse()
+			.find((message) => message.role === "user");
+		const userText = latestUserMessage
+			? latestUserMessage.parts
+					.filter(isTextUIPart)
+					.map((part) => part.text)
+					.join("")
+			: "";
+		if (userText.length > MAX_USER_TEXT_CHARS) {
+			throw new AppError("invalid-argument", "message text exceeds maximum length");
 		}
 
-		this.turnInFlight = true;
-		let streamHandedOff = false;
-		let uploadedFiles: StoredFile[] = [];
+		const offloaded = latestUserMessage
+			? await offloadInlineUserFiles(latestUserMessage, {
+					filesBucket: this.env.FILES_BUCKET,
+					uid: context.user.uid,
+					chatId: context.chatId,
+				})
+			: {
+					uploadedFiles: [],
+					uploadedBytesById: new Map<string, { mimeType: string; bytes: Uint8Array }>(),
+					filesByPartIndex: new Map<number, StoredFile>(),
+				};
 
 		try {
-			const payload = (await request.json()) as ChatTurnPayload;
-			const config = parseEnv(runtimeConfigSchema, this.env);
-			const decodedAttachments = decodeAttachments(payload.message.attachments);
-			const recentHistory = await this.loadRecentContextMessages(MAX_CONTEXT_MESSAGES);
-
-			const model = payload.model;
-			const availableBudgetUsd = assertSufficientCredits({
-				coinBalance: payload.coinBalance,
-				usdPerCoin: config.USD_PER_COIN,
-				pricing: model.pricing,
-				recentHistory,
-				userText: payload.message.text,
-				newAttachmentCount: decodedAttachments.length,
-			});
-
-			const userMessageId = crypto.randomUUID();
-			const assistantMessageId = crypto.randomUUID();
-			const billingIdempotencyKey = crypto.randomUUID();
-			const generatedFiles: StoredFile[] = [];
-
-			const uploaded = await uploadDecodedAttachments(decodedAttachments, {
-				filesBucket: this.env.FILES_BUCKET,
-				uid: payload.user.uid,
-				chatId: payload.chatId,
-				messageId: userMessageId,
-			});
-			uploadedFiles = uploaded.uploadedFiles;
-
-			const userMessage = buildUserMessage(userMessageId, payload.message.text, uploadedFiles);
-			const hydratedMessages = await hydrateModelMessages([...recentHistory, userMessage], {
+			const messagesWithFileUrls = latestUserMessage
+				? rewriteMessageFileUrls(recentMessages, latestUserMessage.id, offloaded.filesByPartIndex)
+				: recentMessages;
+			const hydratedMessages = await hydrateModelMessages(messagesWithFileUrls, {
 				db: this.env.DB,
 				filesBucket: this.env.FILES_BUCKET,
-				uid: payload.user.uid,
-				chatId: payload.chatId,
-				uploadedBytesById: uploaded.uploadedBytesById,
+				uid: context.user.uid,
+				chatId: context.chatId,
+				uploadedBytesById: offloaded.uploadedBytesById,
 			});
 			const modelMessages = pruneMessages({
 				messages: await convertToModelMessages(hydratedMessages),
@@ -246,194 +205,140 @@ export class ChatAgent extends Agent<Env> {
 				emptyMessages: "remove",
 			});
 
+			const activeTurn: ActiveTurn = {
+				context,
+				modelId: model.id,
+				userMessageId: latestUserMessage?.id ?? null,
+				userText,
+				uploadedFiles: offloaded.uploadedFiles,
+				uploadedFilesByPartIndex: offloaded.filesByPartIndex,
+				generatedFiles: [],
+				completedStepsCostUsd: 0,
+				billingIdempotencyKey: crypto.randomUUID(),
+			};
+
 			const tools = createChatTools({
 				db: this.env.DB,
 				filesBucket: this.env.FILES_BUCKET,
-				uid: payload.user.uid,
-				chatId: payload.chatId,
-				assistantMessageId,
-				uploadedFiles,
-				generatedFiles,
+				uid: context.user.uid,
+				chatId: context.chatId,
+				uploadedFiles: activeTurn.uploadedFiles,
+				generatedFiles: activeTurn.generatedFiles,
 			});
 
-			let completedStepsCostUsd = 0;
-			const handleStreamError = (error: unknown): string => {
-				console.error(
-					JSON.stringify({
-						event: "chat_stream_error",
-						uid: payload.user.uid,
-						chatId: payload.chatId,
-						error: error instanceof Error ? error.message : String(error),
-					}),
-				);
-				return "An error occurred while generating the response.";
-			};
+			const result = streamText({
+				model: createGateway({ apiKey: config.AI_GATEWAY_API_KEY })(model.id),
+				instructions: AGENT_INSTRUCTIONS,
+				messages: modelMessages,
+				tools,
+				timeout: STREAM_TIMEOUT,
+				stopWhen: [
+					isStepCount(MAX_AGENT_STEPS),
+					() => activeTurn.completedStepsCostUsd >= availableBudgetUsd,
+				],
+				prepareStep: () => ({
+					maxOutputTokens: computeStepMaxOutputTokens(
+						availableBudgetUsd - activeTurn.completedStepsCostUsd,
+						model.pricing.output,
+					),
+				}),
+				reasoning: parsedBody.data.reasoning as Parameters<typeof streamText>[0]["reasoning"],
+				abortSignal: options?.abortSignal,
+				providerOptions: {
+					gateway: { user: context.user.uid, tags: ["chat", "agent"] },
+				},
+				onStepEnd: (step) => {
+					activeTurn.completedStepsCostUsd += extractStepCostUsd(step, model.pricing);
+				},
+			});
 
-			const stream = createUIMessageStream({
-				generateId: () => assistantMessageId,
-				onError: handleStreamError,
-				execute: ({ writer }) => {
-					writer.write({ type: "start", messageId: assistantMessageId });
-					writer.write({
-						type: "data-chat",
-						data: {
-							chatId: payload.chatId,
-							userMessageId,
-							assistantMessageId,
-							files: uploadedFiles.map(({ id, name, mimeType, size, url }) => ({
-								id,
-								name,
-								mimeType,
-								size,
-								url,
-							})),
-						},
-						transient: true,
-					});
-
-					const result = streamText({
-						model: createGateway({ apiKey: config.AI_GATEWAY_API_KEY })(model.id),
-						instructions: AGENT_INSTRUCTIONS,
-						messages: modelMessages,
-						tools,
-						timeout: STREAM_TIMEOUT,
-						stopWhen: [
-							isStepCount(MAX_AGENT_STEPS),
-							() => completedStepsCostUsd >= availableBudgetUsd,
-						],
-						prepareStep: () => ({
-							maxOutputTokens: computeStepMaxOutputTokens(
-								availableBudgetUsd - completedStepsCostUsd,
-								model.pricing.output,
-							),
+			const stream = toUIMessageStream({
+				stream: result.stream,
+				tools,
+				sendReasoning: true,
+				sendSources: true,
+				onError: (error) => {
+					console.error(
+						JSON.stringify({
+							event: "chat_stream_error",
+							uid: context.user.uid,
+							chatId: context.chatId,
+							error: error instanceof Error ? error.message : String(error),
 						}),
-						reasoning: payload.reasoning as Parameters<typeof streamText>[0]["reasoning"],
-						abortSignal: request.signal,
-						providerOptions: {
-							gateway: { user: payload.user.uid, tags: ["chat", "agent"] },
-						},
-						onStepEnd: (step) => {
-							completedStepsCostUsd += extractStepCostUsd(step, model.pricing);
-						},
-					});
-
-					const uiStream = toUIMessageStream({
-						stream: result.stream,
-						tools,
-						sendStart: false,
-						sendReasoning: true,
-						sendSources: true,
-						onError: handleStreamError,
-						onEnd: ({ outcome }) => {
-							writer.setOutcome(outcome);
-						},
-					});
-
-					writer.merge(
-						uiStream.pipeThrough(
-							createGeneratedFileOffloadStream({
-								filesBucket: this.env.FILES_BUCKET,
-								uid: payload.user.uid,
-								chatId: payload.chatId,
-								assistantMessageId,
-								generatedFiles,
-							}),
-						),
 					);
+					return "An error occurred while generating the response.";
 				},
-				onEnd: async ({ responseMessage, outcome, isAborted, isCancelled }) => {
-					try {
-						await this.finalizeTurn({
-							config,
-							payload,
-							modelId: model.id,
-							userMessage,
-							assistantMessage: { ...responseMessage, id: assistantMessageId },
-							uploadedFiles,
-							generatedFiles,
-							completedStepsCostUsd,
-							billingIdempotencyKey,
-							succeeded: outcome.status === "completed" && !isAborted && !isCancelled,
-						});
-					} finally {
-						this.turnInFlight = false;
-					}
-				},
-			});
+			}).pipeThrough(
+				createGeneratedFileOffloadStream({
+					filesBucket: this.env.FILES_BUCKET,
+					uid: context.user.uid,
+					chatId: context.chatId,
+					generatedFiles: activeTurn.generatedFiles,
+				}),
+			);
 
-			streamHandedOff = true;
-			return createUIMessageStreamResponse({
-				stream,
-				keepAliveMs: SSE_KEEP_ALIVE_MS,
-				headers: {
-					"X-Chat-Id": payload.chatId,
-					"X-User-Message-Id": userMessageId,
-					"X-Assistant-Message-Id": assistantMessageId,
-				},
-			});
+			if (options?.requestId) {
+				this.activeTurns.set(options.requestId, activeTurn);
+			}
+			return createUIMessageStreamResponse({ stream });
 		} catch (error) {
-			if (!streamHandedOff && uploadedFiles.length > 0) {
-				await deleteFilesFromR2(this.env.FILES_BUCKET, uploadedFiles);
-			}
+			await deleteFilesFromR2(this.env.FILES_BUCKET, offloaded.uploadedFiles);
 			throw error;
-		} finally {
-			if (!streamHandedOff) {
-				this.turnInFlight = false;
-			}
 		}
 	}
 
-	private async finalizeTurn(input: {
-		config: RuntimeConfig;
-		payload: ChatTurnPayload;
-		modelId: string;
-		userMessage: UIMessage;
-		assistantMessage: UIMessage;
-		uploadedFiles: readonly StoredFile[];
-		generatedFiles: readonly StoredFile[];
-		completedStepsCostUsd: number;
-		billingIdempotencyKey: string;
-		succeeded: boolean;
-	}): Promise<void> {
-		const { payload } = input;
-		if (input.completedStepsCostUsd > 0) {
+	protected override async onChatResponse(result: ChatResponseResult): Promise<void> {
+		const turn = this.activeTurns.get(result.requestId);
+		this.activeTurns.delete(result.requestId);
+		if (!turn) {
+			return;
+		}
+
+		if (turn.completedStepsCostUsd > 0) {
+			const config = parseEnv(runtimeConfigSchema, this.env);
 			try {
-				await this.billOrEnqueue(input.config, {
-					uid: payload.user.uid,
-					gatewayCostUsd: input.completedStepsCostUsd,
-					idempotencyKey: input.billingIdempotencyKey,
+				await this.billOrEnqueue(config, {
+					uid: turn.context.user.uid,
+					gatewayCostUsd: turn.completedStepsCostUsd,
+					idempotencyKey: turn.billingIdempotencyKey,
 				});
 			} catch (error) {
 				console.error(
 					JSON.stringify({
 						event: "billing_queue_failed",
-						uid: payload.user.uid,
-						chatId: payload.chatId,
+						uid: turn.context.user.uid,
+						chatId: turn.context.chatId,
 						error: error instanceof Error ? error.message : String(error),
 					}),
 				);
 			}
 		}
 
-		const turnFiles = [...input.uploadedFiles, ...input.generatedFiles];
-		if (!input.succeeded) {
+		const generatedFiles = turn.generatedFiles.map((file) => ({
+			...file,
+			messageId: result.message.id,
+		}));
+		const turnFiles = [...turn.uploadedFiles, ...generatedFiles];
+
+		if (result.status !== "completed") {
 			await deleteFilesFromR2(this.env.FILES_BUCKET, turnFiles);
 			return;
 		}
 
-		const responseText = input.assistantMessage.parts
+		const responseText = result.message.parts
 			.filter(isTextUIPart)
 			.map((part) => part.text)
 			.join("");
 		const preview =
-			responseText.slice(0, PREVIEW_LENGTH) || (input.generatedFiles.length > 0 ? "[file]" : "");
+			responseText.slice(0, PREVIEW_LENGTH) || (generatedFiles.length > 0 ? "[file]" : "");
 
+		let updatedChat: ChatRow | null;
 		try {
-			await saveChatSummary(this.env.DB, {
-				user: payload.user,
-				chatId: payload.chatId,
-				title: deriveChatTitle(payload.message.text),
-				modelId: input.modelId,
+			updatedChat = await saveChatSummary(this.env.DB, {
+				user: turn.context.user,
+				chatId: turn.context.chatId,
+				title: deriveChatTitle(turn.userText),
+				modelId: turn.modelId,
 				preview,
 				at: Date.now(),
 				files: turnFiles,
@@ -442,8 +347,8 @@ export class ChatAgent extends Agent<Env> {
 			console.error(
 				JSON.stringify({
 					event: "chat_summary_save_failed",
-					uid: payload.user.uid,
-					chatId: payload.chatId,
+					uid: turn.context.user.uid,
+					chatId: turn.context.chatId,
 					error: error instanceof Error ? error.message : String(error),
 				}),
 			);
@@ -451,8 +356,15 @@ export class ChatAgent extends Agent<Env> {
 			return;
 		}
 
-		await this.session.appendMessage(input.userMessage as unknown as SessionMessage);
-		await this.session.appendMessage(input.assistantMessage as unknown as SessionMessage);
+		if (updatedChat) {
+			this.setState(updatedChat);
+		}
+
+		if (turn.userMessageId && turn.uploadedFilesByPartIndex.size > 0) {
+			await this.persistMessages(
+				rewriteMessageFileUrls(this.messages, turn.userMessageId, turn.uploadedFilesByPartIndex),
+			);
+		}
 	}
 
 	private async billOrEnqueue(config: RuntimeConfig, payload: BillingRetryPayload): Promise<void> {

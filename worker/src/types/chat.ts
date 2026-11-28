@@ -37,23 +37,14 @@ export interface ChatListCursor {
 	id: string;
 }
 
-export interface AttachmentInput {
-	name: string;
-	mimeType: string;
-	data: string;
-}
-
-export interface ChatTurnPayload {
+export interface ChatAgentProps {
 	user: AuthUser;
 	chatId: string;
-	coinBalance: number;
-	model: {
-		id: string;
-		pricing: ModelPricing;
-	};
-	reasoning?: string;
-	message: {
-		text: string;
-		attachments: AttachmentInput[];
-	};
+	chat: ChatRow | null;
+}
+
+export interface BillingRetryPayload {
+	uid: string;
+	gatewayCostUsd: number;
+	idempotencyKey: string;
 }

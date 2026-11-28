@@ -17,7 +17,6 @@ export function createChatTools(context: {
 	filesBucket: R2Bucket;
 	uid: string;
 	chatId: string;
-	assistantMessageId: string;
 	uploadedFiles: StoredFile[];
 	generatedFiles: StoredFile[];
 }) {
@@ -122,7 +121,7 @@ export function createChatTools(context: {
 					filesBucket: context.filesBucket,
 					uid: context.uid,
 					chatId: context.chatId,
-					messageId: context.assistantMessageId,
+					messageId: null,
 					name,
 					mimeType: safeMimeType,
 					bytes: encoded,

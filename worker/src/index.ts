@@ -1,7 +1,7 @@
 import { AppError } from "./errors.ts";
 import { handleSyncUserRequest } from "./handlers/authHandler.ts";
 import {
-	handleChatRequest,
+	handleChatAgentRequest,
 	handleGetChatMessagesRequest,
 	handleListChatsRequest,
 } from "./handlers/chatHandler.ts";
@@ -16,7 +16,7 @@ const HEALTH_ROUTE = new URLPattern({ pathname: "/health{/}?" });
 const AUTH_SYNC_ROUTE = new URLPattern({ pathname: "/auth/sync{/}?" });
 const USAGE_ROUTE = new URLPattern({ pathname: "/usage{/}?" });
 const MODELS_ROUTE = new URLPattern({ pathname: "/models{/}?" });
-const CHAT_ROUTE = new URLPattern({ pathname: "/chat{/}?" });
+const CHAT_AGENT_ROUTE = new URLPattern({ pathname: "/agents/chat-agent/:chatId{/*}?" });
 const CHATS_ROUTE = new URLPattern({ pathname: "/chats{/}?" });
 const CHAT_MESSAGES_ROUTE = new URLPattern({ pathname: "/chats/:chatId/messages{/}?" });
 const FILE_ROUTE = new URLPattern({ pathname: "/files/:fileId{/}?" });
@@ -71,11 +71,14 @@ export default {
 					return await handleListModelsRequest(env, ctx);
 				}
 
-				if (CHAT_ROUTE.test(pathname)) {
-					if (request.method !== "POST") {
-						return errorResponse(405, "invalid-argument", "method not allowed");
-					}
-					return await handleChatRequest(request, env, ctx, user);
+				const chatAgentMatch = CHAT_AGENT_ROUTE.exec(pathname);
+				if (chatAgentMatch) {
+					return await handleChatAgentRequest(
+						request,
+						env,
+						user,
+						decodeParam(chatAgentMatch.pathname.groups.chatId),
+					);
 				}
 
 				if (CHATS_ROUTE.test(pathname)) {

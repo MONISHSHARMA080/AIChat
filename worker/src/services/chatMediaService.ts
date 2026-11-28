@@ -1,7 +1,8 @@
+import { Buffer } from "node:buffer";
 import { isFileUIPart, type UIMessage, type UIMessageChunk } from "ai";
 import { AppError } from "../errors.ts";
 import { getChatFileById } from "../repositories/chatRepository.ts";
-import type { AttachmentInput, StoredFile } from "../types/chat.ts";
+import type { StoredFile } from "../types/chat.ts";
 
 export const MAX_USER_TEXT_CHARS = 32_000;
 export const MAX_USER_ATTACHMENTS_PER_MESSAGE = 5;
@@ -11,8 +12,6 @@ export const MAX_GENERATED_FILE_BYTES = 10 * 1024 * 1024;
 export const MAX_READABLE_TEXT_CHARS = 24_000;
 export const MAX_CONTEXT_MEDIA_TURNS = 2;
 export const MAX_CONTEXT_MEDIA_FILES = 4;
-
-const BASE64_CHUNK_SIZE = 0x8000;
 
 const EXTENSION_BY_MIME_TYPE: Record<string, string> = {
 	"text/plain": "txt",
@@ -86,69 +85,26 @@ export function extractFileIdFromUrl(url: string): string | null {
 	return fileId;
 }
 
-function stripAsciiWhitespace(value: string): string {
-	let start = 0;
-	let chunks: string[] | null = null;
-	for (let index = 0; index < value.length; index += 1) {
-		const char = value[index];
-		if (char === " " || char === "\t" || char === "\n" || char === "\r") {
-			if (!chunks) {
-				chunks = [];
-			}
-			if (index > start) {
-				chunks.push(value.slice(start, index));
-			}
-			start = index + 1;
-		}
-	}
-	if (!chunks) {
-		return value;
-	}
-	if (start < value.length) {
-		chunks.push(value.slice(start));
-	}
-	return chunks.join("");
-}
-
-export function decodeBase64ToBytes(encoded: string, maxBytes: number): Uint8Array {
-	const cleaned = stripAsciiWhitespace(encoded);
-	if (cleaned.length === 0) {
+function decodeBase64ToBytes(encoded: string, maxBytes: number): Uint8Array {
+	const trimmed = encoded.trim();
+	if (trimmed.length === 0) {
 		throw new AppError("invalid-argument", "empty attachment payload");
 	}
-
-	let padding = 0;
-	if (cleaned.endsWith("==")) {
-		padding = 2;
-	} else if (cleaned.endsWith("=")) {
-		padding = 1;
-	}
-	const estimatedBytes = Math.floor((cleaned.length * 3) / 4) - padding;
-	if (estimatedBytes > maxBytes) {
+	const maxEncodedChars = Math.ceil((maxBytes * 4) / 3) + Math.ceil(maxBytes / 32) + 4;
+	if (trimmed.length > maxEncodedChars) {
 		throw new AppError("invalid-argument", "file exceeds maximum byte size");
 	}
-
-	let binary: string;
-	try {
-		binary = atob(cleaned);
-	} catch {
+	const bytes = Buffer.from(trimmed, "base64");
+	if (bytes.byteLength === 0) {
 		throw new AppError("invalid-argument", "invalid base64 payload");
-	}
-
-	if (binary.length > maxBytes) {
-		throw new AppError("invalid-argument", "file exceeds maximum byte size");
-	}
-
-	const bytes = new Uint8Array(binary.length);
-	for (let index = 0; index < binary.length; index += 1) {
-		bytes[index] = binary.charCodeAt(index);
 	}
 	if (bytes.byteLength > maxBytes) {
 		throw new AppError("invalid-argument", "file exceeds maximum byte size");
 	}
-	return bytes;
+	return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 }
 
-export function parseDataUrl(
+function parseDataUrl(
 	dataUrl: string,
 	maxBytes: number,
 ): { mimeType: string; bytes: Uint8Array } | null {
@@ -168,6 +124,10 @@ export function parseDataUrl(
 	const payload = dataUrl.slice(commaIndex + 1);
 	const bytes = decodeBase64ToBytes(payload, maxBytes);
 	return { mimeType, bytes };
+}
+
+function toDataUrl(mimeType: string, bytes: Uint8Array): string {
+	return `data:${mimeType};base64,${Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("base64")}`;
 }
 
 export async function storeFileInR2(input: {
@@ -200,7 +160,7 @@ export async function storeFileInR2(input: {
 	};
 }
 
-export async function loadFileBytesFromR2(
+async function loadFileBytesFromR2(
 	filesBucket: R2Bucket,
 	r2Key: string,
 	maxBytes?: number,
@@ -236,70 +196,86 @@ export async function deleteFilesFromR2(
 	}
 }
 
-interface DecodedAttachment {
-	name: string;
-	mimeType: string;
-	bytes: Uint8Array;
-}
-
-export function decodeAttachments(attachments: readonly AttachmentInput[]): DecodedAttachment[] {
-	return attachments.map((attachment) => {
-		const mimeType = sanitizeMimeType(attachment.mimeType);
-		const name = buildSafeFileName(attachment.name, mimeType);
-		const bytes = decodeBase64ToBytes(attachment.data, MAX_ATTACHMENT_BYTES);
-		return { name, mimeType, bytes };
-	});
-}
-
-export async function uploadDecodedAttachments(
-	decodedAttachments: readonly DecodedAttachment[],
+export async function offloadInlineUserFiles(
+	message: UIMessage,
 	context: {
 		filesBucket: R2Bucket;
 		uid: string;
 		chatId: string;
-		messageId: string;
 	},
 ): Promise<{
 	uploadedFiles: StoredFile[];
 	uploadedBytesById: Map<string, { mimeType: string; bytes: Uint8Array }>;
+	filesByPartIndex: Map<number, StoredFile>;
 }> {
 	const uploadedFiles: StoredFile[] = [];
 	const uploadedBytesById = new Map<string, { mimeType: string; bytes: Uint8Array }>();
+	const filesByPartIndex = new Map<number, StoredFile>();
+	let inlineFileCount = 0;
+
 	try {
-		for (const attachment of decodedAttachments) {
+		for (let partIndex = 0; partIndex < message.parts.length; partIndex += 1) {
+			const part = message.parts[partIndex];
+			if (!isFileUIPart(part) || !part.url.startsWith(DATA_URL_PREFIX)) {
+				continue;
+			}
+			inlineFileCount += 1;
+			if (inlineFileCount > MAX_USER_ATTACHMENTS_PER_MESSAGE) {
+				throw new AppError("invalid-argument", "too many attachments");
+			}
+			const parsed = parseDataUrl(part.url, MAX_ATTACHMENT_BYTES);
+			if (!parsed) {
+				throw new AppError("invalid-argument", "invalid file data url");
+			}
+			const mimeType = sanitizeMimeType(part.mediaType, parsed.mimeType);
 			const stored = await storeFileInR2({
 				filesBucket: context.filesBucket,
 				uid: context.uid,
 				chatId: context.chatId,
-				messageId: context.messageId,
-				name: attachment.name,
-				mimeType: attachment.mimeType,
-				bytes: attachment.bytes,
+				messageId: message.id,
+				name: part.filename ?? `attachment-${inlineFileCount}`,
+				mimeType,
+				bytes: parsed.bytes,
 			});
 			uploadedFiles.push(stored);
-			uploadedBytesById.set(stored.id, {
-				mimeType: stored.mimeType,
-				bytes: attachment.bytes,
-			});
+			uploadedBytesById.set(stored.id, { mimeType: stored.mimeType, bytes: parsed.bytes });
+			filesByPartIndex.set(partIndex, stored);
 		}
-		return { uploadedFiles, uploadedBytesById };
+		return { uploadedFiles, uploadedBytesById, filesByPartIndex };
 	} catch (error) {
 		await deleteFilesFromR2(context.filesBucket, uploadedFiles);
 		throw error;
 	}
 }
 
-function bytesToBase64(bytes: Uint8Array): string {
-	let binary = "";
-	for (let offset = 0; offset < bytes.length; offset += BASE64_CHUNK_SIZE) {
-		const chunk = bytes.subarray(offset, offset + BASE64_CHUNK_SIZE);
-		binary += String.fromCharCode(...chunk);
+export function rewriteMessageFileUrls(
+	messages: readonly UIMessage[],
+	messageId: string,
+	filesByPartIndex: ReadonlyMap<number, StoredFile>,
+): UIMessage[] {
+	if (filesByPartIndex.size === 0) {
+		return [...messages];
 	}
-	return btoa(binary);
-}
-
-function toDataUrl(mimeType: string, bytes: Uint8Array): string {
-	return `data:${mimeType};base64,${bytesToBase64(bytes)}`;
+	return messages.map((message) => {
+		if (message.id !== messageId) {
+			return message;
+		}
+		return {
+			...message,
+			parts: message.parts.map((part, index) => {
+				const stored = filesByPartIndex.get(index);
+				if (!stored || !isFileUIPart(part)) {
+					return part;
+				}
+				return {
+					...part,
+					filename: stored.name,
+					mediaType: stored.mimeType,
+					url: stored.url,
+				};
+			}),
+		};
+	});
 }
 
 export async function hydrateModelMessages(
@@ -330,7 +306,19 @@ export async function hydrateModelMessages(
 
 			const fileId = extractFileIdFromUrl(part.url);
 			if (!fileId) {
-				parts.push(part);
+				if (part.url.startsWith(DATA_URL_PREFIX)) {
+					if (inMediaWindow && remainingMediaBudget > 0) {
+						remainingMediaBudget -= 1;
+						parts.push(part);
+					} else {
+						parts.push({
+							type: "text",
+							text: `[File: ${part.filename ?? "attachment"} (${part.mediaType})]`,
+						});
+					}
+				} else {
+					parts.push(part);
+				}
 				continue;
 			}
 
@@ -383,7 +371,6 @@ export function createGeneratedFileOffloadStream(context: {
 	filesBucket: R2Bucket;
 	uid: string;
 	chatId: string;
-	assistantMessageId: string;
 	generatedFiles: StoredFile[];
 }): TransformStream<UIMessageChunk, UIMessageChunk> {
 	return new TransformStream<UIMessageChunk, UIMessageChunk>({
@@ -411,7 +398,7 @@ export function createGeneratedFileOffloadStream(context: {
 						filesBucket: context.filesBucket,
 						uid: context.uid,
 						chatId: context.chatId,
-						messageId: context.assistantMessageId,
+						messageId: null,
 						name: `generated-${context.generatedFiles.length + 1}`,
 						mimeType: parsed.mimeType,
 						bytes: parsed.bytes,

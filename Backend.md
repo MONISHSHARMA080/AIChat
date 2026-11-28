@@ -10,11 +10,12 @@ Cloudflare Worker in `worker/` that lets the user talk to any LLM through Vercel
 
 ### Worker handler vs Agent split
 
-* **Worker `fetch()` + `handlers/`** — auth (`withFirebaseAuth`), REST endpoints (`GET /models`, `GET /usage`, `POST /auth/sync`, `GET /chats`, `GET /chats/:chatId/messages`, `GET /files/:fileId`), and routing `/agents/chat-agent/:chatId` to the user's DO (`${user.uid}:${chatId}`) via `getAgentByName`
+* **Worker `fetch()` + `handlers/`** — auth (`withFirebaseAuth`, supporting `Authorization: Bearer` and `?token=` on WebSocket upgrades), REST endpoints (`GET /health`, `GET /models`, `GET /usage`, `POST /auth/sync`, `GET /chats`, `GET /chats/:chatId/messages`, `GET /files/:fileId`), and routing `/agents/chat-agent/:chatId{/*}?` to the user's DO (`${user.uid}:${chatId}`) via `getAgentByName`
 * the Worker handler only runs for REST calls and the initial WebSocket handshake — it should never stay awake waiting for an AI turn to finish
 * **`ChatAgent` (`extends AIChatAgent`)** — only owns the chat turn lifecycle and delegates everything else to `services/` and `repositories/`:
-  * `onChatMessage`: validate `{ model, reasoning }` and check credits via services, prepare model messages + tools, run `streamText`, and return `createUIMessageStreamResponse({ stream: toUIMessageStream(...) })`
-  * `onChatResponse`: deduct actual turn cost via `billingService` (fall back to `this.queue("retryBillingDeduction", ...)` if RevenueCat fails), upsert the chat summary + file rows in D1 only on success, update `this.setState(...)`, and clean up R2 files if the turn failed/aborted
+  * `onStart`: store `{ user, chatId }` in DO storage and seed `this.state` from the existing D1 chat row when present
+  * `onChatMessage`: validate `{ model, reasoning }` and check credits via services, offload inline user `data:` files to R2, hydrate recent media + prune model messages, run `streamText` with tools, pipe through generated-file R2 offloading, and return `createUIMessageStreamResponse({ stream })`
+  * `onChatResponse`: deduct actual turn cost via `billingService` (fall back to `this.queue("retryBillingDeduction", ...)` if RevenueCat fails), upsert the chat summary + file rows in D1 only on success, update `this.setState(...)`, rewrite inline user `data:` URLs to `/files/:fileId` via `this.persistMessages(...)`, and clean up R2 files if the turn failed/aborted or D1 failed
 
 ### Chats & state
 

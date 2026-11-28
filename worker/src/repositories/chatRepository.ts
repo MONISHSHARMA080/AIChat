@@ -19,6 +19,14 @@ export async function getChatById(
 		.first<ChatRow>();
 }
 
+export async function getChatOwnerId(db: D1Database, chatId: string): Promise<string | null> {
+	const row = await db
+		.prepare("SELECT userId FROM chats WHERE id = ? LIMIT 1")
+		.bind(chatId)
+		.first<{ userId: string }>();
+	return row?.userId ?? null;
+}
+
 export async function getChatFilesMetadata(
 	db: D1Database,
 	userId: string,

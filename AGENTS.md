@@ -17,7 +17,7 @@ think of rest of this docs as more of good practice and not hard rules
 * if the lib used contains the functionality then use that and don't reinvent the wheel
 * my app uses Layered architecture
 * see Backend.md when working on backend
-* the alarm app is just for me to see the ui don't make the backend decision based on that, as I'll change it 
+* the android app is just for me to see the ui don't make the backend decision based on that, as I'll change it 
 
 ### code-style
 
